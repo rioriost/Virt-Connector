@@ -1,11 +1,11 @@
 cask "virt-connector" do
-  version "0.1.2"
-  sha256 "76d34b1acae0833d36d0ccdbe8d12b9fd3f7e2897796859343092a682173beb9"
+  version "0.1.3"
+  sha256 "e068117f5e110636b1a9305d24d1bee424a8e26e10c73879026c0afbb9ad60e8"
 
-  url "https://github.com/rioriost/Virt-Connector/releases/download/v#{version}/VirtConnector-#{version}-signed.pkg"
+  url "https://github.com/rioriost/virt-connector/releases/download/v#{version}/VirtConnector-#{version}-signed.pkg"
   name "VirtConnector"
   desc "Link macOS display sleep, wake, and shutdown events to Shortcuts"
-  homepage "https://github.com/rioriost/Virt-Connector"
+  homepage "https://github.com/rioriost/virt-connector"
 
   depends_on macos: :ventura
 
