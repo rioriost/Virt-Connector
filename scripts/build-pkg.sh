@@ -4,7 +4,7 @@ set -euo pipefail
 export COPYFILE_DISABLE=1
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${VERSION:-0.1.2}"
+VERSION="${VERSION:-0.1.3}"
 CONFIGURATION="${CONFIGURATION:-release}"
 DIST_DIR="${DIST_DIR:-"$ROOT_DIR/dist"}"
 WORK_DIR="$ROOT_DIR/.build/pkg"
@@ -20,7 +20,7 @@ usage() {
 Usage: scripts/build-pkg.sh [--unsigned] [--notarize]
 
 Environment:
-  VERSION                         Package version. Default: 0.1.2
+  VERSION                         Package version. Default: 0.1.3
   DEVELOPER_ID_APPLICATION         Developer ID Application certificate name
   DEVELOPER_ID_INSTALLER           Developer ID Installer certificate name
   NOTARYTOOL_PROFILE               xcrun notarytool keychain profile
