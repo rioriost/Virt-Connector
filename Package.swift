@@ -20,6 +20,10 @@ let package = Package(
         .executableTarget(
             name: "VirtConnectorDaemon",
             dependencies: ["VirtConnectorCore"]
+        ),
+        .testTarget(
+            name: "VirtConnectorCoreTests",
+            dependencies: ["VirtConnectorCore"]
         )
     ]
 )

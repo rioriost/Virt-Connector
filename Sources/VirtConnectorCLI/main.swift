@@ -41,6 +41,8 @@ struct VirtConnectorCLI {
             try setEnabled(false)
         case "install-agent":
             try installAgent(rest)
+        case "restore-agent":
+            try restoreAgent()
         case "uninstall-agent":
             try LaunchAgentManager().uninstall()
             print("Uninstalled LaunchAgent \(LaunchAgentManager.label).")
@@ -130,6 +132,24 @@ struct VirtConnectorCLI {
         for device in config.devices {
             printDevice(device)
         }
+    }
+
+    private static func restoreAgent() throws {
+        // Homebrew flight steps use a temporary HOME. Resolve the account's home
+        // explicitly so upgrades continue to use the user's existing configuration.
+        guard let home = FileManager.default.homeDirectory(forUser: NSUserName()) else {
+            throw CLIError.usage("could not find the current user's home directory")
+        }
+        let store = ConfigStore(configURL: home.appendingPathComponent(".config/virt-connector/config.json"))
+        guard store.shouldRestoreAgent() else { return }
+
+        let manager = LaunchAgentManager(
+            plistURL: home.appendingPathComponent("Library/LaunchAgents/\(LaunchAgentManager.label).plist"),
+            logDirectory: home.appendingPathComponent("Library/Logs")
+        )
+        try manager.install(daemonPath: "/Library/VirtConnector/VirtConnectorAgent.app/Contents/MacOS/virt-connectord")
+        try manager.bootstrap()
+        print("Restored LaunchAgent \(LaunchAgentManager.label).")
     }
 
     private static func device(_ arguments: [String]) throws {
@@ -317,6 +337,7 @@ struct VirtConnectorCLI {
               virt-connector status
               virt-connector enable | disable
               virt-connector install-agent [--daemon PATH]
+              virt-connector restore-agent
               virt-connector uninstall-agent
               virt-connector restart-agent
               virt-connector shortcuts

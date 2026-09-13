@@ -5,13 +5,16 @@ public struct LaunchAgentManager {
 
     private let processRunner: ProcessRunner
     private let plistURL: URL
+    private let logDirectory: URL
 
     public init(
         processRunner: ProcessRunner = ProcessRunner(),
-        plistURL: URL = ConfigStore.launchAgentsDirectoryURL().appendingPathComponent("\(LaunchAgentManager.label).plist")
+        plistURL: URL = ConfigStore.launchAgentsDirectoryURL().appendingPathComponent("\(LaunchAgentManager.label).plist"),
+        logDirectory: URL = ConfigStore.logsDirectoryURL()
     ) {
         self.processRunner = processRunner
         self.plistURL = plistURL
+        self.logDirectory = logDirectory
     }
 
     public func install(daemonPath: String) throws {
@@ -20,7 +23,6 @@ public struct LaunchAgentManager {
             withIntermediateDirectories: true
         )
 
-        let logDirectory = ConfigStore.logsDirectoryURL()
         try FileManager.default.createDirectory(at: logDirectory, withIntermediateDirectories: true)
 
         let plist = """

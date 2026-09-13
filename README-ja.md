@@ -105,6 +105,8 @@ virt-connector setup
 
 以後のHomebrew Cask upgradeでは、既存configがあり監視が有効な場合だけLaunchAgentを自動で再登録します。configがない初回インストールでは自動起動しません。
 
+Homebrew 7の`postflight_steps`から`virt-connector restore-agent`を呼び出します。この配布用コマンドは、Homebrewの一時ホーム環境でも実際のユーザー設定を参照します。設定がない場合、無効な場合、内容が不正な場合は何も変更しません。
+
 `sudo virt-connector setup`は使わないでください。LaunchAgentはログイン中のユーザーに対して登録する必要があるため、rootで実行すると正しいAquaセッションに登録できません。CLIは`sudo`実行を拒否します。
 
 ## Shortcuts

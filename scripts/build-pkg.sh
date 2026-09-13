@@ -4,7 +4,7 @@ set -euo pipefail
 export COPYFILE_DISABLE=1
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${VERSION:-0.1.3}"
+VERSION="${VERSION:-0.1.4}"
 CONFIGURATION="${CONFIGURATION:-release}"
 DIST_DIR="${DIST_DIR:-"$ROOT_DIR/dist"}"
 WORK_DIR="$ROOT_DIR/.build/pkg"
@@ -20,10 +20,11 @@ usage() {
 Usage: scripts/build-pkg.sh [--unsigned] [--notarize]
 
 Environment:
-  VERSION                         Package version. Default: 0.1.3
+  VERSION                         Package version. Default: 0.1.4
   DEVELOPER_ID_APPLICATION         Developer ID Application certificate name
   DEVELOPER_ID_INSTALLER           Developer ID Installer certificate name
   NOTARYTOOL_PROFILE               xcrun notarytool keychain profile
+  SWIFT_BUILD_SYSTEM               Optional SwiftPM build-system override
 
 Examples:
   scripts/build-pkg.sh --unsigned
@@ -78,7 +79,11 @@ AGENT_CONTENTS="$AGENT_APP/Contents"
 AGENT_MACOS="$AGENT_CONTENTS/MacOS"
 mkdir -p "$PKG_ROOT/Library/VirtConnector/bin" "$PKG_ROOT/Library/VirtConnector/share" "$AGENT_MACOS" "$DIST_DIR"
 
-swift build -c "$CONFIGURATION" --package-path "$ROOT_DIR"
+swift_build_args=(-c "$CONFIGURATION" --package-path "$ROOT_DIR" --sdk "$(xcrun --sdk macosx --show-sdk-path)")
+if [[ -n "${SWIFT_BUILD_SYSTEM:-}" ]]; then
+  swift_build_args+=(--build-system "$SWIFT_BUILD_SYSTEM")
+fi
+swift build "${swift_build_args[@]}"
 
 cp "$ROOT_DIR/.build/$CONFIGURATION/virt-connector" "$PKG_ROOT/Library/VirtConnector/bin/virt-connector"
 cp "$ROOT_DIR/.build/$CONFIGURATION/virt-connectord" "$AGENT_MACOS/virt-connectord"

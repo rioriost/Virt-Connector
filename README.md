@@ -107,6 +107,8 @@ virt-connector setup
 
 When the Homebrew Cask is upgraded later, an existing enabled configuration is re-registered automatically so the LaunchAgent keeps running after the upgrade. Fresh installs without a configuration are not started automatically.
 
+The Homebrew 7 `postflight_steps` hook calls `virt-connector restore-agent`. This packaging command reads the account’s existing configuration even when Homebrew supplies a temporary home directory. Missing, disabled, or invalid configurations are left untouched.
+
 Do not run `sudo virt-connector setup`. The LaunchAgent must be registered for the logged-in user and Aqua session. The CLI rejects sudo execution.
 
 ## Shortcuts
