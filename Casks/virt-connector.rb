@@ -1,6 +1,6 @@
 cask "virt-connector" do
-  version "0.1.4"
-  sha256 "12feb15357ea915ae951afc1411c1bd58c36f667bcb63a23c54b7091391280d8"
+  version "0.1.5"
+  sha256 "119a3fda65fff95b8bcfbf6a0ea58f7b42de10c8b7deb71219519d64ad07ebd2"
 
   url "https://github.com/rioriost/virt-connector/releases/download/v#{version}/VirtConnector-#{version}-signed.pkg"
   name "VirtConnector"
@@ -10,16 +10,6 @@ cask "virt-connector" do
   depends_on macos: :ventura
 
   pkg "VirtConnector-#{version}-signed.pkg"
-
-  postflight_steps do
-    run "/Library/VirtConnector/bin/virt-connector",
-        args:           ["restore-agent"],
-        writable_paths: [
-          "~/.config/virt-connector",
-          "~/Library/LaunchAgents",
-          "~/Library/Logs",
-        ]
-  end
 
   uninstall launchctl: "st.rio.virt-connectord",
             pkgutil:   "st.rio.virt-connector.pkg",

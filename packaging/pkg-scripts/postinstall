@@ -10,4 +10,23 @@ mkdir -p "$LINK_DIR"
 ln -sf "$INSTALL_DIR/virt-connector" "$LINK_DIR/virt-connector"
 ln -sf "$AGENT_BIN" "$LINK_DIR/virt-connectord"
 
+# Restore only on the startup volume and in a real console user's session.
+# Installer package scripts run outside Homebrew's cask flight-step sandbox,
+# which permits launchctl queries but prevents bootstrap of a user service.
+if [ "${3:-/}" = "/" ]; then
+  console_user=$(/usr/bin/stat -f '%Su' /dev/console)
+  case "$console_user" in
+    ""|root|loginwindow|_mbsetupuser) ;;
+    *)
+      console_uid=$(/usr/bin/id -u "$console_user")
+      if ! /bin/launchctl asuser "$console_uid" \
+        /usr/bin/sudo -n -H -u "$console_user" \
+        "$INSTALL_DIR/virt-connector" restore-agent; then
+        echo "Warning: VirtConnector was installed, but its LaunchAgent could not be restored." >&2
+        echo "Run 'virt-connector restore-agent' as the logged-in user to retry." >&2
+      fi
+      ;;
+  esac
+fi
+
 exit 0
