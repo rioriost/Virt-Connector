@@ -4,12 +4,15 @@ set -euo pipefail
 export COPYFILE_DISABLE=1
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${VERSION:-0.1.5}"
+VERSION="${VERSION:-$(cat "$ROOT_DIR/VERSION")}"
 CONFIGURATION="${CONFIGURATION:-release}"
 DIST_DIR="${DIST_DIR:-"$ROOT_DIR/dist"}"
-WORK_DIR="$ROOT_DIR/.build/pkg"
+WORK_DIR="$ROOT_DIR/.build/pkg-$$"
 PKG_ROOT="$WORK_DIR/root"
+PKG_SCRIPTS="$WORK_DIR/scripts"
 PKG_IDENTIFIER="${PKG_IDENTIFIER:-st.rio.virt-connector.pkg}"
+TARGET_TRIPLE="arm64-apple-macosx13.0"
+export MACOSX_DEPLOYMENT_TARGET=13.0
 PKG_NAME="VirtConnector-${VERSION}.pkg"
 PKG_PATH="$DIST_DIR/$PKG_NAME"
 SIGNED_PKG_PATH="$DIST_DIR/VirtConnector-${VERSION}-signed.pkg"
@@ -20,11 +23,15 @@ usage() {
 Usage: scripts/build-pkg.sh [--unsigned] [--notarize]
 
 Environment:
-  VERSION                         Package version. Default: 0.1.5
+  VERSION                         Package version. Default: repository VERSION file
   DEVELOPER_ID_APPLICATION         Developer ID Application certificate name
   DEVELOPER_ID_INSTALLER           Developer ID Installer certificate name
   NOTARYTOOL_PROFILE               xcrun notarytool keychain profile
-  SWIFT_BUILD_SYSTEM               Optional SwiftPM build-system override
+  SWIFT_BUILD_SYSTEM               SwiftPM backend. Default: native
+
+Artifacts target arm64 and macOS 13.0. Both binaries must report the selected
+macOS SDK version, architecture, and deployment target before packaging.
+Build intermediates use a private project-local work directory, removed on exit.
 
 Examples:
   scripts/build-pkg.sh --unsigned
@@ -73,22 +80,82 @@ if [[ "$notarize" == true ]]; then
   : "${NOTARYTOOL_PROFILE:?NOTARYTOOL_PROFILE is required for --notarize}"
 fi
 
-rm -rf "$WORK_DIR"
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "invalid package version: expected major.minor.patch" >&2
+  exit 2
+fi
+
+if [[ -L "$ROOT_DIR/.build" ]]; then
+  echo "refusing a symlinked .build directory" >&2
+  exit 1
+fi
+mkdir -p "$ROOT_DIR/.build"
+mkdir -m 700 "$WORK_DIR"
+cleanup() {
+  if [[ "$WORK_DIR" == "$ROOT_DIR/.build/pkg-$$" && ! -L "$ROOT_DIR/.build" && ! -L "$WORK_DIR" ]]; then
+    python3 - "$WORK_DIR" <<'PY'
+import shutil
+import sys
+
+shutil.rmtree(sys.argv[1])
+PY
+  fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 AGENT_APP="$PKG_ROOT/Library/VirtConnector/VirtConnectorAgent.app"
 AGENT_CONTENTS="$AGENT_APP/Contents"
 AGENT_MACOS="$AGENT_CONTENTS/MacOS"
-mkdir -p "$PKG_ROOT/Library/VirtConnector/bin" "$PKG_ROOT/Library/VirtConnector/share" "$AGENT_MACOS" "$DIST_DIR"
+mkdir -p "$PKG_ROOT/Library/VirtConnector/bin" "$PKG_ROOT/Library/VirtConnector/share" "$AGENT_MACOS" "$PKG_SCRIPTS" "$DIST_DIR"
 
-swift_build_args=(-c "$CONFIGURATION" --package-path "$ROOT_DIR" --sdk "$(xcrun --sdk macosx --show-sdk-path)")
-if [[ -n "${SWIFT_BUILD_SYSTEM:-}" ]]; then
-  swift_build_args+=(--build-system "$SWIFT_BUILD_SYSTEM")
-fi
+SDK_PATH="$(xcrun --sdk macosx --show-sdk-path)"
+SDK_VERSION="$(xcrun --sdk macosx --show-sdk-version)"
+swift_build_args=(
+  -c "$CONFIGURATION"
+  --package-path "$ROOT_DIR"
+  --scratch-path "$WORK_DIR/swift"
+  --triple "$TARGET_TRIPLE"
+  --sdk "$SDK_PATH"
+  --build-system "${SWIFT_BUILD_SYSTEM:-native}"
+)
 swift build "${swift_build_args[@]}"
+BIN_PATH="$(swift build "${swift_build_args[@]}" --show-bin-path)"
 
-cp "$ROOT_DIR/.build/$CONFIGURATION/virt-connector" "$PKG_ROOT/Library/VirtConnector/bin/virt-connector"
-cp "$ROOT_DIR/.build/$CONFIGURATION/virt-connectord" "$AGENT_MACOS/virt-connectord"
+verify_binary() {
+  local binary="$1"
+  if [[ "$(xcrun lipo -archs "$binary")" != "arm64" ]]; then
+    echo "unsupported architecture in $binary: expected arm64 only" >&2
+    return 1
+  fi
+  xcrun vtool -show-build "$binary" | python3 -c '
+import re
+import sys
+
+def version(value):
+    parts = tuple(int(part) for part in value.split("."))
+    return parts + (0,) * (3 - len(parts))
+
+text = sys.stdin.read()
+expected = {"platform": "MACOS", "minos": "13.0", "sdk": sys.argv[1]}
+for key, value in expected.items():
+    actual = re.findall(r"^\s*" + key + r"\s+(\S+)\s*$", text, re.M)
+    matches = len(actual) == 1
+    if matches:
+        matches = actual[0] == value if key == "platform" else version(actual[0]) == version(value)
+    if not matches:
+        sys.exit(f"invalid Mach-O {key} in {sys.argv[2]}: expected {value}, got {actual}")
+' "$SDK_VERSION" "$binary"
+}
+
+verify_binary "$BIN_PATH/virt-connector"
+verify_binary "$BIN_PATH/virt-connectord"
+cp "$BIN_PATH/virt-connector" "$PKG_ROOT/Library/VirtConnector/bin/virt-connector"
+cp "$BIN_PATH/virt-connectord" "$AGENT_MACOS/virt-connectord"
 cp "$ROOT_DIR/LICENSE" "$PKG_ROOT/Library/VirtConnector/share/LICENSE"
 cp "$ROOT_DIR/README.md" "$PKG_ROOT/Library/VirtConnector/share/README.md"
+cp "$ROOT_DIR/packaging/pkg-scripts/preinstall" "$ROOT_DIR/packaging/pkg-scripts/postinstall" "$PKG_SCRIPTS/"
 
 cat > "$AGENT_CONTENTS/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -128,9 +195,9 @@ chmod 0755 "$AGENT_MACOS/virt-connectord"
 chmod 0644 "$AGENT_CONTENTS/Info.plist"
 chmod 0644 "$PKG_ROOT/Library/VirtConnector/share/LICENSE"
 chmod 0644 "$PKG_ROOT/Library/VirtConnector/share/README.md"
-chmod 0755 "$ROOT_DIR/packaging/pkg-scripts/preinstall" "$ROOT_DIR/packaging/pkg-scripts/postinstall"
+chmod 0755 "$PKG_SCRIPTS/preinstall" "$PKG_SCRIPTS/postinstall"
 find "$PKG_ROOT" -name '._*' -delete
-xattr -cr "$PKG_ROOT" "$ROOT_DIR/packaging/pkg-scripts" 2>/dev/null || true
+xattr -cr "$PKG_ROOT" "$PKG_SCRIPTS" 2>/dev/null || true
 
 if [[ "$unsigned" == false ]]; then
   codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID_APPLICATION" \
@@ -141,7 +208,7 @@ fi
 
 pkgbuild_args=(
   --root "$PKG_ROOT"
-  --scripts "$ROOT_DIR/packaging/pkg-scripts"
+  --scripts "$PKG_SCRIPTS"
   --identifier "$PKG_IDENTIFIER"
   --version "$VERSION"
   --install-location "/"

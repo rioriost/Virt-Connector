@@ -8,6 +8,8 @@ VirtConnector does not directly control Apple Home or Matter devices. Device sel
 
 ## Quick Start
 
+The signed package supports Apple Silicon (arm64), macOS 13 or later, and installation on the startup volume only.
+
 ### 1. Install with Homebrew Cask
 
 ```sh
@@ -50,7 +52,7 @@ This creates or updates:
 
 After setup, display sleep/wake runs `TurnOffLED`/`TurnOnLED`.
 
-For reliable shutdown-time LED-off behavior, use the VirtConnector menu bar item `Shut Down...` instead of the Apple menu shutdown item. VirtConnector runs configured `power_off` actions first, then asks macOS to shut down.
+To run LED-off actions before shutdown, use the VirtConnector menu bar item `Shut Down...` instead of the Apple menu shutdown item. VirtConnector asks macOS to shut down only after the configured `power_off` actions succeed. A successful Shortcut does not independently verify the physical device state.
 
 Japanese documentation is available in [README-ja.md](README-ja.md).
 
@@ -80,6 +82,8 @@ Japanese documentation is available in [README-ja.md](README-ja.md).
   - LaunchAgent stop events such as Homebrew upgrades, `launchctl bootout`, or `SIGTERM` are not treated as `power_off`.
 
 Each device can choose `on`, `off`, or `none` for each event.
+
+Display events, manual CLI actions, and shutdown requests share one execution coordinator while the agent is running. Once shutdown preparation starts, queued display actions are skipped and new manual actions are rejected. Repeated shutdown notifications do not rerun the same power-off actions. An unloaded agent permits standalone CLI execution, protected against concurrent agent/CLI execution by a per-user ownership lock.
 
 Default actions for the first configured device:
 
@@ -172,6 +176,10 @@ export VIRT_CONNECTOR_LOG_DIR=/tmp/virt-connector/logs
 export VIRT_CONNECTOR_LAUNCH_AGENTS_DIR=/tmp/virt-connector/LaunchAgents
 ```
 
+Agent registration records the resolved configuration and log paths in its plist. CLI actions reject a running agent that uses a different configuration; register the intended paths before using it. These overrides do not create a second independent agent for the same user.
+
+Existing unreadable or invalid configurations cause an explicit error and are never replaced with empty defaults. Only initialization commands create a missing configuration. Legacy configurations may omit `enabled` (defaults to true), but must contain a valid `devices` array.
+
 ## Device Configuration
 
 List devices:
@@ -227,6 +235,8 @@ Enable again:
 virt-connector enable
 ```
 
+`enable` also registers/starts the agent when needed, including after an upgrade performed while monitoring was disabled. `status` distinguishes configuration enablement from LaunchAgent registration and loading.
+
 ## Manual Testing
 
 Run configured actions without waiting for macOS events:
@@ -245,7 +255,7 @@ virt-connector status
 
 ## Shutdown
 
-For reliable `power_off` actions, use either:
+To complete `power_off` actions before requesting shutdown, use either:
 
 - the VirtConnector menu bar item `Shut Down...`
 - `virt-connector shutdown`
@@ -256,9 +266,19 @@ CLI:
 virt-connector shutdown
 ```
 
-This runs configured `power_off` actions, then asks macOS to shut down through System Events.
+This runs configured `power_off` actions, then asks macOS to shut down through System Events only if all required actions succeeded. Failures include the affected device and Shortcut; CLI commands return a nonzero exit status. When the agent is loaded, the CLI sends the request through the agent rather than starting competing Shortcuts. Connection errors and response timeouts never trigger an automatic standalone retry.
 
-Apple menu shutdown is handled best-effort, but during macOS shutdown Shortcuts may already be unavailable. Use the VirtConnector menu or `virt-connector shutdown` when reliable LED-off behavior is required.
+Apple menu shutdown remains best-effort: Shortcuts may already be unavailable and VirtConnector cannot cancel that external shutdown on a device-action failure.
+
+If another application cancels macOS shutdown after VirtConnector has finished its actions, use the agent menu `Resume After Canceled Shutdown...` or:
+
+```sh
+virt-connector resume
+```
+
+Only resume after canceling the OS shutdown. This command re-enables event handling; it does **not** cancel a pending macOS shutdown request or change a disabled configuration. Failed VirtConnector shutdown requests automatically return to normal event handling.
+
+Shortcuts have a 30-second per-process deadline and a 120-second total action budget per event. A timeout is a failure, not a successful device action.
 
 The menu bar UI switches between English and Japanese using `AppleLanguages`, via `Locale.preferredLanguages`.
 
@@ -346,12 +366,14 @@ scripts/build-pkg.sh --notarize
 Update the Cask SHA256:
 
 ```sh
-VERSION=0.1.2 scripts/update-cask.sh dist/VirtConnector-0.1.2-signed.pkg
+scripts/update-cask.sh dist/VirtConnector-0.1.6-signed.pkg
 ```
+
+The repository's `VERSION` file is shared by the build and Cask updater. The updater checks the package's identifier and version before changing the Cask; a mismatched package is rejected. Always update the Cask from the final notarized and stapled artifact.
 
 ## Homebrew Formula
 
-`Formula/virt-connector.rb` is included for source builds with Homebrew.
+`Formula/virt-connector.rb` is a HEAD-only development definition, requiring explicit `--HEAD`. It does not provide a stable Formula release; use the Cask for supported packaged releases or the Swift build commands below for local development.
 
 The intended distribution path for users is the Cask. The Cask can install `VirtConnectorAgent.app` through a pkg and is the right shape for a notarized macOS app-like tool.
 
@@ -360,6 +382,13 @@ The intended distribution path for users is the Cask. The Cask can install `Virt
 ```sh
 swift build
 swift build -c release
+```
+
+Regression tests use temporary configurations and substitute OS operations; they do not shut down the Mac or control real devices:
+
+```sh
+swift test
+python3 -B -m unittest scripts/test-postinstall.py scripts/test-packaging.py
 ```
 
 ## License

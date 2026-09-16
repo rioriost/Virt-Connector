@@ -3,13 +3,13 @@ import Foundation
 public struct ShutdownPerformer {
     private let configStore: ConfigStore
     private let actionExecutor: ActionExecutor
-    private let processRunner: ProcessRunner
+    private let processRunner: any ProcessRunning
     private let log: FileLog?
 
     public init(
         configStore: ConfigStore = ConfigStore(),
         actionExecutor: ActionExecutor = ActionExecutor(),
-        processRunner: ProcessRunner = ProcessRunner(),
+        processRunner: any ProcessRunning = ProcessRunner(),
         log: FileLog? = nil
     ) {
         self.configStore = configStore
@@ -20,10 +20,19 @@ public struct ShutdownPerformer {
 
     @discardableResult
     public func perform() throws -> ActionExecutionResult {
-        let config = configStore.loadOrDefault()
+        let config = try configStore.load()
         let result = actionExecutor.execute(trigger: .powerOff, config: config)
-        log?.write("Requesting macOS shutdown after power_off actions")
-        _ = try processRunner.run("/usr/bin/osascript", ["-e", "tell application \"System Events\" to shut down"])
+        try result.requireSuccess()
+        try requestShutdown()
         return result
+    }
+
+    public func requestShutdown() throws {
+        log?.write("Requesting macOS shutdown after power_off actions")
+        _ = try processRunner.run(
+            "/usr/bin/osascript",
+            ["-e", "tell application \"System Events\" to shut down"],
+            timeout: 120
+        )
     }
 }

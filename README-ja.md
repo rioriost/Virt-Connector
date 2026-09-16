@@ -8,6 +8,8 @@ Apple HomeやMatterデバイスを直接制御するのではなく、制御対�
 
 ## Quick Start
 
+署名済みpkgはApple Silicon（arm64）、macOS 13以降、起動中のボリュームへのインストールに対応します。
+
 ### 1. Homebrew Caskでインストール
 
 ```sh
@@ -50,7 +52,7 @@ virt-connector setup --device "LED Strip" --on TurnOnLED --off TurnOffLED
 
 以後、ディスプレイのスリープ/復帰に応じて`TurnOffLED`/`TurnOnLED`が実行されます。
 
-システム終了時に確実にLEDをオフにしたい場合は、Appleメニューの「システム終了...」ではなく、VirtConnectorのメニューバーアイコンから「システム終了...」を選びます。このメニューは、設定済みの`power_off`動作を実行してからmacOSのシステム終了を要求します。
+システム終了前にLEDの消灯動作を実行したい場合は、Appleメニューではなく、VirtConnectorのメニューバーアイコンから「システム終了...」を選びます。設定済みの`power_off`動作が成功した場合だけmacOSのシステム終了を要求します。Shortcutの成功とは別に、実際の機器状態を検証するものではありません。
 
 ## 構成
 
@@ -78,6 +80,8 @@ virt-connector setup --device "LED Strip" --on TurnOnLED --off TurnOffLED
   - Homebrew upgrade、`launchctl bootout`、`SIGTERM`などのLaunchAgent停止イベントは`power_off`として扱いません。
 
 各デバイスはイベントごとに`on`、`off`、`none`を設定できます。
+
+エージェント稼働中は、表示イベント・CLIの手動操作・終了要求を同じ実行管理に集約します。終了準備を開始すると未着手の表示操作を取り消し、新たな手動操作を拒否します。同じ終了要求に伴う通知で電源オフ動作を繰り返しません。エージェント未登録時のCLI単独実行は、ユーザー単位のロックで他のエージェント・CLIとの同時実行を防ぎます。
 
 デフォルトでは、最初に作成されるデバイスは以下の動作になります。
 
@@ -170,6 +174,10 @@ export VIRT_CONNECTOR_LOG_DIR=/tmp/virt-connector/logs
 export VIRT_CONNECTOR_LAUNCH_AGENTS_DIR=/tmp/virt-connector/LaunchAgents
 ```
 
+登録時に解決した設定・ログの保存先はplistに記録されます。稼働中のエージェントとCLIの設定パスが違う場合、手動操作はエラーになります。意図した保存先でエージェントを再登録してください。これらの変数は、同じユーザーの別エージェントを作るものではありません。
+
+既存の設定が読めない場合や不正な場合はエラーとし、空の設定で上書きしません。設定ファイルの初期作成は初期化を行うコマンドだけが行います。旧設定の`enabled`省略はtrueとして扱いますが、有効な`devices`配列が必要です。
+
 ## デバイス設定
 
 デバイス一覧:
@@ -225,6 +233,8 @@ virt-connector disable
 virt-connector enable
 ```
 
+`enable`は必要に応じてエージェントの登録・起動も行うため、無効状態でupgradeした後でも監視を再開できます。`status`は設定の有効・無効とLaunchAgentの登録・ロード状態を分けて表示します。
+
 ## 手動テスト
 
 macOSイベントを待たずに、設定済みの動作を手動実行できます。
@@ -243,7 +253,7 @@ virt-connector status
 
 ## システム終了
 
-安定して`power_off`動作を実行したい場合は、以下のどちらかを使います。
+macOSへの終了要求より前に`power_off`動作を完了させたい場合は、以下のどちらかを使います。
 
 - メニューバーのVirtConnectorアイコンから「システム終了...」を選ぶ
 - CLIで`virt-connector shutdown`を実行する
@@ -254,9 +264,19 @@ CLIの場合:
 virt-connector shutdown
 ```
 
-このコマンドは、設定済みの`power_off`動作を実行してから、System Events経由でmacOSのシステム終了を要求します。
+このコマンドは、必要な`power_off`動作がすべて成功した場合だけ、System Events経由でmacOSのシステム終了を要求します。失敗したデバイス・Shortcutと理由を表示し、CLIは非0の終了コードを返します。エージェント稼働中はCLIもエージェント経由で実行し、競合するShortcutを起動しません。接続失敗や応答タイムアウト時に、CLI単独で自動再実行することもありません。
 
-Appleメニューの「システム終了...」から開始された終了処理もbest-effortで検知を試みますが、macOSの終了フェーズではShortcuts実行がすでに失敗することがあります。そのため、確実な消灯が必要な場合はVirtConnectorのメニューまたは`virt-connector shutdown`を使ってください。
+Appleメニューからの終了は引き続きbest-effortです。Shortcutsがすでに使えない場合があり、機器操作に失敗してもVirtConnectorから外部の終了要求を取り消すことはできません。
+
+VirtConnectorの操作完了後、別のアプリケーションによってmacOSの終了がキャンセルされた場合は、メニューの「終了キャンセル後に監視を再開...」または以下を使います。
+
+```sh
+virt-connector resume
+```
+
+必ずmacOSの終了をキャンセル済みの場合だけ実行してください。イベント受付を再開する操作であり、OSの終了要求を取り消したり、無効な設定を有効化したりするものではありません。VirtConnector自体の終了要求に失敗した場合は、自動的に通常のイベント受付へ戻ります。
+
+Shortcutの実行期限は1プロセス30秒、イベント全体の動作は120秒です。タイムアウトは成功ではなく失敗として扱います。
 
 メニューバーの表示言語は、macOSの`AppleLanguages`、つまり`Locale.preferredLanguages`に従って日本語/英語を切り替えます。
 
@@ -344,12 +364,14 @@ scripts/build-pkg.sh --notarize
 最終pkgのSHA256をCaskに反映:
 
 ```sh
-VERSION=0.1.2 scripts/update-cask.sh dist/VirtConnector-0.1.2-signed.pkg
+scripts/update-cask.sh dist/VirtConnector-0.1.6-signed.pkg
 ```
+
+ビルドとCask更新はリポジトリの`VERSION`ファイルを共有します。Cask更新前にpkgの識別子・バージョンを確認し、不一致の場合は変更を拒否します。必ずnotarize・staple後の最終成果物から更新してください。
 
 ## Homebrew Formula
 
-`Formula/virt-connector.rb`は、HomebrewでソースビルドするためのFormulaです。
+`Formula/virt-connector.rb`は、明示的な`--HEAD`を必要とする開発用定義です。安定版Formulaは提供しません。正式なパッケージ配布にはCaskを、ローカル開発には以下のSwiftビルド手順を使ってください。
 
 通常利用者向けの配布経路はCaskです。Caskはpkg経由で`VirtConnectorAgent.app`を配置でき、メニューバー項目やnotarizationを含むmacOSアプリ配布に向いています。
 
@@ -358,6 +380,13 @@ VERSION=0.1.2 scripts/update-cask.sh dist/VirtConnector-0.1.2-signed.pkg
 ```sh
 swift build
 swift build -c release
+```
+
+回帰テストは一時設定とOS操作の代替実装を使い、Macのシステム終了や実機の操作を行いません。
+
+```sh
+swift test
+python3 -B -m unittest scripts/test-postinstall.py scripts/test-packaging.py
 ```
 
 ## ライセンス

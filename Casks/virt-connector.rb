@@ -1,12 +1,13 @@
 cask "virt-connector" do
-  version "0.1.5"
-  sha256 "119a3fda65fff95b8bcfbf6a0ea58f7b42de10c8b7deb71219519d64ad07ebd2"
+  version "0.1.6"
+  sha256 "ebd0b49ab035b2ff4b26b2353a5f48e6e48a01af2a55696b3c5af9ccde5332c1"
 
   url "https://github.com/rioriost/virt-connector/releases/download/v#{version}/VirtConnector-#{version}-signed.pkg"
   name "VirtConnector"
   desc "Link display sleep, wake, and shutdown events to Shortcuts"
   homepage "https://github.com/rioriost/virt-connector"
 
+  depends_on arch: :arm64
   depends_on macos: :ventura
 
   pkg "VirtConnector-#{version}-signed.pkg"
@@ -21,6 +22,7 @@ cask "virt-connector" do
 
   zap trash: [
     "~/.config/virt-connector",
+    "~/Library/Caches/st.rio.virt-connectord",
     "~/Library/LaunchAgents/st.rio.virt-connectord.plist",
     "~/Library/Logs/virt-connectord.err.log",
     "~/Library/Logs/virt-connectord.log",

@@ -2,6 +2,11 @@
 
 set -eu
 
+if [ "${3:-}" != "/" ]; then
+  echo "VirtConnector supports installation on the startup volume (/) only." >&2
+  exit 1
+fi
+
 INSTALL_DIR="/Library/VirtConnector/bin"
 AGENT_BIN="/Library/VirtConnector/VirtConnectorAgent.app/Contents/MacOS/virt-connectord"
 LINK_DIR="/usr/local/bin"
@@ -10,23 +15,24 @@ mkdir -p "$LINK_DIR"
 ln -sf "$INSTALL_DIR/virt-connector" "$LINK_DIR/virt-connector"
 ln -sf "$AGENT_BIN" "$LINK_DIR/virt-connectord"
 
-# Restore only on the startup volume and in a real console user's session.
 # Installer package scripts run outside Homebrew's cask flight-step sandbox,
 # which permits launchctl queries but prevents bootstrap of a user service.
-if [ "${3:-/}" = "/" ]; then
-  console_user=$(/usr/bin/stat -f '%Su' /dev/console)
+restore_agent() {
+  console_user=$(/usr/bin/stat -f '%Su' /dev/console) || return 1
   case "$console_user" in
     ""|root|loginwindow|_mbsetupuser) ;;
     *)
-      console_uid=$(/usr/bin/id -u "$console_user")
-      if ! /bin/launchctl asuser "$console_uid" \
+      console_uid=$(/usr/bin/id -u "$console_user") || return 1
+      /bin/launchctl asuser "$console_uid" \
         /usr/bin/sudo -n -H -u "$console_user" \
-        "$INSTALL_DIR/virt-connector" restore-agent; then
-        echo "Warning: VirtConnector was installed, but its LaunchAgent could not be restored." >&2
-        echo "Run 'virt-connector restore-agent' as the logged-in user to retry." >&2
-      fi
+        "$INSTALL_DIR/virt-connector" restore-agent || return 1
       ;;
   esac
+}
+
+if ! restore_agent; then
+  echo "Warning: VirtConnector was installed, but its LaunchAgent could not be restored." >&2
+  echo "Run 'virt-connector restore-agent' as the logged-in user to retry." >&2
 fi
 
 exit 0

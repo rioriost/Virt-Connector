@@ -6,19 +6,39 @@ import VirtConnectorCore
 final class VirtConnectorDaemon: NSObject, NSApplicationDelegate {
     private let configStore = ConfigStore()
     private let log = FileLog.daemonLog()
-    private lazy var executor = ActionExecutor(log: log)
+    private let cancellation = ProcessCancellation()
+    private lazy var executor = ActionExecutor(
+        shortcutRunner: ShortcutRunner(processRunner: ProcessRunner(cancellation: cancellation)),
+        log: log
+    )
     private lazy var shutdownPerformer = ShutdownPerformer(
         configStore: configStore,
         actionExecutor: executor,
+        processRunner: ProcessRunner(cancellation: cancellation),
         log: log
     )
 
-    private let actionQueue = DispatchQueue(label: "st.rio.virt-connectord.actions", qos: .userInitiated)
+    private lazy var coordinator: PowerEventCoordinator = PowerEventCoordinator(
+        execute: { [unowned self] trigger in
+            let config = try self.configStore.load()
+            return self.executor.execute(trigger: trigger, config: config)
+        },
+        requestShutdown: { [unowned self] in try self.shutdownPerformer.requestShutdown() },
+        log: { [log] message in log.write(message) },
+        stateChanged: { [weak self] in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.shutdownMenuItem?.isEnabled = !self.coordinator.isShutdownPending
+                self.resumeMenuItem?.isEnabled = self.coordinator.canResume
+            }
+        }
+    )
+    private let ownership = AgentOwnershipLock()
+    private var ipcServer: AgentIPCServer?
     private var signalSources: [DispatchSourceSignal] = []
-    private var powerOffHandled = false
     private var statusItem: NSStatusItem?
     private var shutdownMenuItem: NSMenuItem?
-    private var lastDisplayEvent: (trigger: PowerTrigger, date: Date)?
+    private var resumeMenuItem: NSMenuItem?
     private let localizer = AgentLocalizer()
 
     static func main() {
@@ -26,12 +46,25 @@ final class VirtConnectorDaemon: NSObject, NSApplicationDelegate {
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
         app.delegate = daemon
-        daemon.start()
-        app.run()
+        do {
+            try daemon.start()
+            withExtendedLifetime(daemon) { app.run() }
+        } catch {
+            daemon.log.write("Unable to start agent: \(error.localizedDescription)")
+            exit(1)
+        }
     }
 
-    private func start() {
+    private func start() throws {
+        guard try ownership.acquire() else {
+            throw AgentCommunicationError("Another agent or standalone command owns device execution.")
+        }
         log.write("virt-connectord starting")
+        _ = executor
+        _ = shutdownPerformer
+        let server = AgentIPCServer(coordinator: coordinator, configURL: configStore.configURL)
+        ipcServer = server
+        server.start()
         ProcessInfo.processInfo.disableSuddenTermination()
         log.write("NSApplication initialized with accessory activation policy")
         installStatusMenu()
@@ -49,7 +82,7 @@ final class VirtConnectorDaemon: NSObject, NSApplicationDelegate {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.handleDisplayEvent(.displayOff, reason: "NSWorkspace.screensDidSleepNotification")
+            self?.coordinator.handleDisplayEvent(.displayOff, reason: "NSWorkspace.screensDidSleepNotification")
         }
 
         workspaceCenter.addObserver(
@@ -57,7 +90,7 @@ final class VirtConnectorDaemon: NSObject, NSApplicationDelegate {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.handleDisplayEvent(.displayOn, reason: "NSWorkspace.screensDidWakeNotification")
+            self?.coordinator.handleDisplayEvent(.displayOn, reason: "NSWorkspace.screensDidWakeNotification")
         }
 
         workspaceCenter.addObserver(
@@ -65,7 +98,7 @@ final class VirtConnectorDaemon: NSObject, NSApplicationDelegate {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.handleDisplayEvent(.displayOff, reason: "NSWorkspace.willSleepNotification")
+            self?.coordinator.handleDisplayEvent(.displayOff, reason: "NSWorkspace.willSleepNotification")
         }
 
         workspaceCenter.addObserver(
@@ -73,7 +106,7 @@ final class VirtConnectorDaemon: NSObject, NSApplicationDelegate {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.handleDisplayEvent(.displayOn, reason: "NSWorkspace.didWakeNotification")
+            self?.coordinator.handleDisplayEvent(.displayOn, reason: "NSWorkspace.didWakeNotification")
         }
 
         log.write("Installed NSWorkspace display sleep/wake observers")
@@ -85,7 +118,13 @@ final class VirtConnectorDaemon: NSObject, NSApplicationDelegate {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.handlePowerOff(reason: "NSWorkspace.willPowerOffNotification", shouldExit: false)
+            guard let self else { return }
+            self.log.write("Received NSWorkspace.willPowerOffNotification")
+            self.coordinator.shutdown(requestSystemShutdown: false) { [log = self.log] result in
+                if case .failure(let error) = result {
+                    log.write("Best-effort power_off failed: \(error.localizedDescription)")
+                }
+            }
         }
     }
 
@@ -94,8 +133,11 @@ final class VirtConnectorDaemon: NSObject, NSApplicationDelegate {
             signal(signalNumber, SIG_IGN)
             let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .main)
             source.setEventHandler { [weak self] in
-                self?.log.write("Received signal \(signalNumber), exiting without power_off action")
-                exit(0)
+                guard let self else { return }
+                self.log.write("Received signal \(signalNumber), canceling work without power_off action")
+                self.cancellation.cancel()
+                self.ipcServer?.stop()
+                self.coordinator.stop { exit(0) }
             }
             source.resume()
             signalSources.append(source)
@@ -113,6 +155,7 @@ final class VirtConnectorDaemon: NSObject, NSApplicationDelegate {
         }
 
         let menu = NSMenu()
+        menu.autoenablesItems = false
         let shutdownItem = NSMenuItem(
             title: localizer.shutdownMenuTitle,
             action: #selector(confirmAndShutdown),
@@ -121,6 +164,13 @@ final class VirtConnectorDaemon: NSObject, NSApplicationDelegate {
         shutdownItem.target = self
         menu.addItem(shutdownItem)
         self.shutdownMenuItem = shutdownItem
+        let resumeItem = NSMenuItem(
+            title: localizer.resumeMenuTitle, action: #selector(resumeMonitoring), keyEquivalent: ""
+        )
+        resumeItem.target = self
+        resumeItem.isEnabled = false
+        menu.addItem(resumeItem)
+        resumeMenuItem = resumeItem
 
         statusItem.menu = menu
         log.write("Installed status menu")
@@ -145,19 +195,30 @@ final class VirtConnectorDaemon: NSObject, NSApplicationDelegate {
         shutdownMenuItem?.isEnabled = false
         log.write("Menu shutdown requested")
 
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        coordinator.shutdown { [weak self] result in
             guard let self else { return }
-
-            do {
-                let result = try self.shutdownPerformer.perform()
-                self.log.write("Menu shutdown action completed: attempted=\(result.attempted) failed=\(result.failed)")
-            } catch {
-                self.log.write("Menu shutdown failed: \(error)")
+            switch result {
+            case .success(let outcome):
+                self.log.write("Menu shutdown action completed: attempted=\(outcome.attempted) failed=\(outcome.failed)")
+            case .failure(let error):
                 DispatchQueue.main.async {
-                    self.shutdownMenuItem?.isEnabled = true
                     self.showShutdownError(error)
                 }
             }
+        }
+    }
+
+    @objc private func resumeMonitoring() {
+        let alert = NSAlert()
+        alert.messageText = localizer.resumeMenuTitle
+        alert.informativeText = localizer.resumeMessage
+        alert.addButton(withTitle: localizer.resumeButtonTitle)
+        alert.addButton(withTitle: localizer.cancelButtonTitle)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        do {
+            try coordinator.resumeAfterCancelledShutdown()
+        } catch {
+            showShutdownError(error)
         }
     }
 
@@ -166,7 +227,7 @@ final class VirtConnectorDaemon: NSObject, NSApplicationDelegate {
 
         let alert = NSAlert()
         alert.messageText = localizer.shutdownFailedTitle
-        alert.informativeText = String(describing: error)
+        alert.informativeText = error.localizedDescription
         alert.alertStyle = .critical
         alert.addButton(withTitle: "OK")
         alert.runModal()
@@ -203,50 +264,21 @@ final class VirtConnectorDaemon: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        handlePowerOff(reason: "NSApplication.applicationShouldTerminate", shouldExit: false)
-        return .terminateNow
+        let reply = {
+            DispatchQueue.main.async { sender.reply(toApplicationShouldTerminate: true) }
+        }
+        if coordinator.isShutdownPending {
+            coordinator.whenReadyToTerminate(reply)
+        } else {
+            cancellation.cancel()
+            coordinator.stop(completion: reply)
+        }
+        return .terminateLater
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        handlePowerOff(reason: "NSApplication.applicationWillTerminate", shouldExit: false)
-    }
-
-    private func execute(_ trigger: PowerTrigger) {
-        let config = configStore.loadOrDefault()
-        _ = executor.execute(trigger: trigger, config: config)
-    }
-
-    private func executeAsync(_ trigger: PowerTrigger, reason: String) {
-        actionQueue.async { [weak self] in
-            guard let self else { return }
-            self.log.write("Handling \(trigger.rawValue) from \(reason)")
-            self.execute(trigger)
-        }
-    }
-
-    private func handleDisplayEvent(_ trigger: PowerTrigger, reason: String) {
-        let now = Date()
-        if let lastDisplayEvent,
-           lastDisplayEvent.trigger == trigger,
-           now.timeIntervalSince(lastDisplayEvent.date) < 2 {
-            log.write("Skipping duplicate \(trigger.rawValue) from \(reason)")
-            return
-        }
-
-        lastDisplayEvent = (trigger, now)
-        log.write("Detected \(trigger.rawValue) from \(reason)")
-        executeAsync(trigger, reason: reason)
-    }
-
-    private func handlePowerOff(reason: String, shouldExit: Bool) {
-        if powerOffHandled {
-            log.write("Skipping duplicate power_off trigger from \(reason)")
-            return
-        }
-
-        powerOffHandled = true
-        log.write("Detected \(reason); running power_off actions\(shouldExit ? " before exit" : "")")
-        execute(.powerOff)
+        ipcServer?.stop()
+        log.write("Application terminating without additional power_off actions")
     }
 }
 
@@ -267,9 +299,9 @@ private struct AgentLocalizer {
 
     var shutdownDialogMessage: String {
         if isJapanese {
-            return "VirtConnectorは設定済みの電源オフ動作を実行してから、macOSのシステム終了を要求します。"
+            return "設定済みの電源オフ動作に成功した後、macOSのシステム終了を要求します。動作に失敗した場合は終了を中止します。"
         }
-        return "VirtConnector will run configured power-off actions before requesting macOS shutdown."
+        return "VirtConnector requests macOS shutdown only after configured power-off actions succeed. Failed actions cancel this request."
     }
 
     var shutdownButtonTitle: String {
@@ -282,6 +314,21 @@ private struct AgentLocalizer {
 
     var shutdownFailedTitle: String {
         isJapanese ? "システム終了に失敗しました" : "Shutdown Failed"
+    }
+
+    var resumeMenuTitle: String {
+        isJapanese ? "終了キャンセル後に監視を再開..." : "Resume After Canceled Shutdown..."
+    }
+
+    var resumeButtonTitle: String {
+        isJapanese ? "監視を再開" : "Resume Monitoring"
+    }
+
+    var resumeMessage: String {
+        if isJapanese {
+            return "macOSの終了をキャンセル済みの場合だけ再開してください。この操作自体はmacOSの終了要求を取り消しません。"
+        }
+        return "Resume only after canceling macOS shutdown. This action does not cancel the operating system's shutdown request."
     }
 
     private var isJapanese: Bool {

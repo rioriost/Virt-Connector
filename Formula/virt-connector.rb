@@ -1,8 +1,6 @@
 class VirtConnector < Formula
-  desc "Link macOS display sleep, wake, and shutdown events to Shortcuts"
+  desc "Development source build linking macOS display events to Shortcuts"
   homepage "https://github.com/rioriost/Virt-Connector"
-  url "https://github.com/rioriost/Virt-Connector/archive/refs/tags/v0.1.0.tar.gz"
-  sha256 "PUT_SHA256_HERE"
   license "MIT"
   head "https://github.com/rioriost/Virt-Connector.git", branch: "main"
 

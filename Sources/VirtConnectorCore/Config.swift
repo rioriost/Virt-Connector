@@ -126,6 +126,17 @@ public struct VirtConnectorConfig: Codable, Equatable {
         self.devices = devices
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case enabled, devices
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        // Legacy configurations omitted only the top-level enabled flag.
+        enabled = values.contains(.enabled) ? try values.decode(Bool.self, forKey: .enabled) : true
+        devices = try values.decode([ShortcutDevice].self, forKey: .devices)
+    }
+
     public static let sampleDevice = ShortcutDevice(
         name: "LED Strip",
         onShortcut: "TurnOnLED",

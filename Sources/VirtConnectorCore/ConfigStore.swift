@@ -1,10 +1,24 @@
 import Foundation
 
+public enum ConfigStoreError: LocalizedError {
+    case fileNotFound(URL)
+    case loadFailed(URL, underlying: Error)
+
+    public var errorDescription: String? {
+        switch self {
+        case .fileNotFound(let url):
+            return "Configuration not found at \(url.path); run setup or device add first."
+        case let .loadFailed(url, error):
+            return "Could not load configuration at \(url.path): \(error.localizedDescription)"
+        }
+    }
+}
+
 public final class ConfigStore {
     public let configURL: URL
 
     public init(configURL: URL = ConfigStore.defaultConfigURL()) {
-        self.configURL = configURL
+        self.configURL = configURL.standardizedFileURL
     }
 
     public static func defaultConfigURL() -> URL {
@@ -39,21 +53,36 @@ public final class ConfigStore {
     }
 
     public func load() throws -> VirtConnectorConfig {
-        let data = try Data(contentsOf: configURL)
-        return try JSONDecoder().decode(VirtConnectorConfig.self, from: data)
+        let data: Data
+        do {
+            data = try Data(contentsOf: configURL)
+        } catch {
+            let nsError = error as NSError
+            if (nsError.domain == NSCocoaErrorDomain && nsError.code == NSFileReadNoSuchFileError)
+                || (nsError.domain == NSPOSIXErrorDomain && nsError.code == Int(ENOENT)) {
+                throw ConfigStoreError.fileNotFound(configURL)
+            }
+            throw ConfigStoreError.loadFailed(configURL, underlying: error)
+        }
+        do {
+            return try JSONDecoder().decode(VirtConnectorConfig.self, from: data)
+        } catch {
+            throw ConfigStoreError.loadFailed(configURL, underlying: error)
+        }
     }
 
-    public func loadOrDefault() -> VirtConnectorConfig {
-        (try? load()) ?? VirtConnectorConfig()
+    /// Only initial-creation commands may opt into defaults for a missing file.
+    public func loadOrDefault() throws -> VirtConnectorConfig {
+        do {
+            return try load()
+        } catch ConfigStoreError.fileNotFound {
+            return VirtConnectorConfig()
+        }
     }
 
     /// Upgrade hooks must not create a configuration or enable disabled monitoring.
     public func shouldRestoreAgent() -> Bool {
-        guard let data = try? Data(contentsOf: configURL),
-              let config = try? JSONDecoder().decode(AgentRestoreConfig.self, from: data) else {
-            return false
-        }
-        return config.enabled
+        (try? load().enabled) ?? false
     }
 
     public func save(_ config: VirtConnectorConfig) throws {
@@ -67,26 +96,12 @@ public final class ConfigStore {
     }
 
     public func ensureDefaultConfig() throws -> VirtConnectorConfig {
-        if FileManager.default.fileExists(atPath: configURL.path) {
+        do {
             return try load()
+        } catch ConfigStoreError.fileNotFound {
+            let config = VirtConnectorConfig(devices: [VirtConnectorConfig.sampleDevice])
+            try save(config)
+            return config
         }
-
-        let config = VirtConnectorConfig(devices: [VirtConnectorConfig.sampleDevice])
-        try save(config)
-        return config
-    }
-}
-
-private struct AgentRestoreConfig: Decodable {
-    let enabled: Bool
-
-    private enum CodingKeys: String, CodingKey {
-        case enabled
-    }
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        // Older configurations may omit the key; explicit null remains disabled.
-        enabled = values.contains(.enabled) ? try values.decodeIfPresent(Bool.self, forKey: .enabled) ?? false : true
     }
 }

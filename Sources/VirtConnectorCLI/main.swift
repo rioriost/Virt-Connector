@@ -28,6 +28,9 @@ struct VirtConnectorCLI {
         }
 
         let rest = Array(arguments.dropFirst())
+        if !["setup", "install-agent", "device", "run"].contains(command), !rest.isEmpty {
+            throw CLIError.usage("\(command) does not accept arguments or options")
+        }
         switch command {
         case "help", "-h", "--help":
             printUsage()
@@ -47,7 +50,7 @@ struct VirtConnectorCLI {
             try LaunchAgentManager().uninstall()
             print("Uninstalled LaunchAgent \(LaunchAgentManager.label).")
         case "restart-agent":
-            try LaunchAgentManager().bootstrap()
+            try LaunchAgentManager().ensureRunning(daemonPath: try defaultDaemonPath())
             print("Restarted LaunchAgent \(LaunchAgentManager.label).")
         case "devices":
             try listDevices()
@@ -56,18 +59,25 @@ struct VirtConnectorCLI {
         case "shortcuts":
             try listShortcuts()
         case "run":
+            guard rest.count == 1, !rest[0].hasPrefix("-") else {
+                throw CLIError.usage("run requires exactly one trigger: display-on, display-off, or power-off")
+            }
             try runTrigger(rest)
         case "shutdown":
             try shutdown()
+        case "resume":
+            try AgentCommandRouter().resume()
+            print("Monitoring resumed.")
         default:
             throw CLIError.usage("unknown command: \(command)")
         }
     }
 
     private static func setup(_ arguments: [String]) throws {
-        let options = Options(arguments)
+        let options = try Options(arguments, allowed: ["--device", "--on", "--off", "--daemon"])
+        let daemonPath = try options.value(for: "--daemon") ?? defaultDaemonPath()
         let store = ConfigStore()
-        var config = store.loadOrDefault()
+        var config = try store.loadOrDefault()
 
         if config.devices.isEmpty {
             config.devices.append(
@@ -81,7 +91,9 @@ struct VirtConnectorCLI {
 
         config.enabled = true
         try store.save(config)
-        try installAgent(arguments)
+        let manager = LaunchAgentManager(configURL: store.configURL)
+        try manager.install(daemonPath: daemonPath)
+        try manager.bootstrap()
 
         print("Configured \(store.configURL.path)")
         print("Installed and started LaunchAgent \(LaunchAgentManager.label).")
@@ -89,10 +101,19 @@ struct VirtConnectorCLI {
 
     private static func status() throws {
         let store = ConfigStore()
-        let config = store.loadOrDefault()
+        let config = try store.load()
+        let manager = LaunchAgentManager(configURL: store.configURL)
 
         print("Config: \(store.configURL.path)")
-        print("Monitoring: \(config.enabled ? "enabled" : "disabled")")
+        print("Monitoring configuration: \(config.enabled ? "enabled" : "disabled")")
+        print("LaunchAgent plist: \(manager.isInstalled ? "installed" : "not installed")")
+        let loaded = try manager.isLoaded()
+        print("LaunchAgent service: \(loaded ? "loaded" : "not loaded")")
+        let running = loaded ? try manager.isRunning() : false
+        print("LaunchAgent process: \(running ? "running" : "not running")")
+        if config.enabled && !running {
+            print("Monitoring is not active; run virt-connector enable to start the LaunchAgent.")
+        }
         print("Devices: \(config.devices.count)")
 
         for device in config.devices {
@@ -101,19 +122,31 @@ struct VirtConnectorCLI {
 
         print("")
         print("LaunchAgent:")
-        print(try LaunchAgentManager().printStatus())
+        print(try manager.printStatus())
     }
 
     private static func setEnabled(_ enabled: Bool) throws {
         let store = ConfigStore()
-        var config = store.loadOrDefault()
+        var config = try store.load()
         config.enabled = enabled
         try store.save(config)
-        print("Monitoring \(enabled ? "enabled" : "disabled").")
+        if enabled {
+            do {
+                try LaunchAgentManager(configURL: store.configURL).ensureRunning(daemonPath: try defaultDaemonPath())
+            } catch {
+                throw CLIError.operation(
+                    "Configuration is enabled, but the LaunchAgent could not be started: \(error.localizedDescription) "
+                    + "Monitoring may be inactive; fix the error and retry enable, or use install-agent --daemon PATH."
+                )
+            }
+            print("Monitoring enabled; LaunchAgent process is running.")
+        } else {
+            print("Monitoring disabled in configuration; the LaunchAgent may remain loaded but will skip device actions.")
+        }
     }
 
     private static func installAgent(_ arguments: [String]) throws {
-        let options = Options(arguments)
+        let options = try Options(arguments, allowed: ["--daemon"])
         let daemonPath = try options.value(for: "--daemon") ?? defaultDaemonPath()
         let manager = LaunchAgentManager()
         try manager.install(daemonPath: daemonPath)
@@ -123,7 +156,7 @@ struct VirtConnectorCLI {
     }
 
     private static func listDevices() throws {
-        let config = ConfigStore().loadOrDefault()
+        let config = try ConfigStore().load()
         if config.devices.isEmpty {
             print("No devices configured.")
             return
@@ -145,7 +178,8 @@ struct VirtConnectorCLI {
 
         let manager = LaunchAgentManager(
             plistURL: home.appendingPathComponent("Library/LaunchAgents/\(LaunchAgentManager.label).plist"),
-            logDirectory: home.appendingPathComponent("Library/Logs")
+            logDirectory: home.appendingPathComponent("Library/Logs"),
+            configURL: store.configURL
         )
         try manager.install(daemonPath: "/Library/VirtConnector/VirtConnectorAgent.app/Contents/MacOS/virt-connectord")
         try manager.bootstrap()
@@ -171,11 +205,14 @@ struct VirtConnectorCLI {
     }
 
     private static func addDevice(_ arguments: [String]) throws {
-        guard let name = arguments.first, !name.hasPrefix("--") else {
+        guard let name = arguments.first, !name.hasPrefix("-"), !name.isEmpty else {
             throw CLIError.usage("device add requires a name")
         }
 
-        let options = Options(Array(arguments.dropFirst()))
+        let options = try Options(
+            Array(arguments.dropFirst()),
+            allowed: ["--on", "--off", "--display-on", "--display-off", "--power-off"]
+        )
         guard let onShortcut = options.value(for: "--on") else {
             throw CLIError.usage("device add requires --on SHORTCUT")
         }
@@ -183,10 +220,10 @@ struct VirtConnectorCLI {
             throw CLIError.usage("device add requires --off SHORTCUT")
         }
 
-        let store = ConfigStore()
-        var config = store.loadOrDefault()
         var actions = TriggerActions()
         try applyActionOptions(options, to: &actions)
+        let store = ConfigStore()
+        var config = try store.loadOrDefault()
 
         let device = ShortcutDevice(
             name: name,
@@ -200,12 +237,13 @@ struct VirtConnectorCLI {
     }
 
     private static func removeDevice(_ arguments: [String]) throws {
-        guard let selector = arguments.first else {
-            throw CLIError.usage("device remove requires a name or UUID")
+        guard arguments.count == 1, let selector = arguments.first,
+              !selector.hasPrefix("-"), !selector.isEmpty else {
+            throw CLIError.usage("device remove requires exactly one name or UUID")
         }
 
         let store = ConfigStore()
-        var config = store.loadOrDefault()
+        var config = try store.load()
         let before = config.devices.count
         config.devices.removeAll { matches($0, selector: selector) }
         guard config.devices.count != before else {
@@ -217,13 +255,22 @@ struct VirtConnectorCLI {
     }
 
     private static func setDevice(_ arguments: [String]) throws {
-        guard let selector = arguments.first else {
+        guard let selector = arguments.first, !selector.hasPrefix("-"), !selector.isEmpty else {
             throw CLIError.usage("device set requires a name or UUID")
         }
 
-        let options = Options(Array(arguments.dropFirst()))
+        let options = try Options(
+            Array(arguments.dropFirst()),
+            allowed: ["--name", "--enabled", "--on", "--off", "--display-on", "--display-off", "--power-off"]
+        )
+        guard arguments.count > 1 else {
+            throw CLIError.usage("device set requires at least one option")
+        }
+        let enabled = try options.value(for: "--enabled").map(parseBool)
+        var actions = TriggerActions()
+        try applyActionOptions(options, to: &actions)
         let store = ConfigStore()
-        var config = store.loadOrDefault()
+        var config = try store.load()
 
         guard let index = config.devices.firstIndex(where: { matches($0, selector: selector) }) else {
             throw CLIError.usage("device not found: \(selector)")
@@ -232,8 +279,8 @@ struct VirtConnectorCLI {
         if let name = options.value(for: "--name") {
             config.devices[index].name = name
         }
-        if let enabled = options.value(for: "--enabled") {
-            config.devices[index].enabled = try parseBool(enabled)
+        if let enabled {
+            config.devices[index].enabled = enabled
         }
         if let onShortcut = options.value(for: "--on") {
             config.devices[index].onShortcut = onShortcut
@@ -258,13 +305,14 @@ struct VirtConnectorCLI {
             throw CLIError.usage("run requires display-on, display-off, or power-off")
         }
 
-        let config = ConfigStore().loadOrDefault()
-        let result = ActionExecutor().execute(trigger: trigger, config: config)
+        let result = try AgentCommandRouter().run(trigger)
+        try result.requireSuccess()
         print("Executed \(trigger.rawValue): attempted=\(result.attempted) failed=\(result.failed)")
     }
 
     private static func shutdown() throws {
-        let result = try ShutdownPerformer().perform()
+        let result = try AgentCommandRouter().shutdown()
+        try result.requireSuccess()
         print("Executed power_off: attempted=\(result.attempted) failed=\(result.failed)")
     }
 
@@ -333,7 +381,7 @@ struct VirtConnectorCLI {
         print(
             """
             Usage:
-              virt-connector setup [--device NAME --on SHORTCUT --off SHORTCUT]
+              virt-connector setup [--device NAME --on SHORTCUT --off SHORTCUT] [--daemon PATH]
               virt-connector status
               virt-connector enable | disable
               virt-connector install-agent [--daemon PATH]
@@ -347,6 +395,14 @@ struct VirtConnectorCLI {
               virt-connector device remove NAME_OR_UUID
               virt-connector run display-on|display-off|power-off
               virt-connector shutdown
+              virt-connector resume
+
+            setup and device add may create a missing configuration. Other configuration
+            commands require a readable, valid configuration; failures never replace it.
+            enable starts the managed LaunchAgent and verifies a stable running PID.
+            enable and restart-agent refresh its plist while preserving the registered daemon path.
+            disable changes configuration only; a loaded agent skips device actions.
+            resume clears a loaded agent's completed/cancelled shutdown state.
             """
         )
     }
@@ -355,18 +411,24 @@ struct VirtConnectorCLI {
 private struct Options {
     private let values: [String: String]
 
-    init(_ arguments: [String]) {
+    init(_ arguments: [String], allowed: Set<String>) throws {
         var values: [String: String] = [:]
         var index = 0
 
         while index < arguments.count {
             let argument = arguments[index]
-            if argument.hasPrefix("--"), index + 1 < arguments.count {
-                values[argument] = arguments[index + 1]
-                index += 2
-            } else {
-                index += 1
+            guard allowed.contains(argument) else {
+                throw CLIError.usage("unknown option or unexpected argument: \(argument)")
             }
+            guard values[argument] == nil else {
+                throw CLIError.usage("duplicate option: \(argument)")
+            }
+            guard index + 1 < arguments.count, !arguments[index + 1].hasPrefix("-"),
+                  !arguments[index + 1].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw CLIError.usage("\(argument) requires a value")
+            }
+            values[argument] = arguments[index + 1]
+            index += 2
         }
 
         self.values = values
@@ -379,10 +441,11 @@ private struct Options {
 
 private enum CLIError: LocalizedError {
     case usage(String)
+    case operation(String)
 
     var errorDescription: String? {
         switch self {
-        case .usage(let message):
+        case .usage(let message), .operation(let message):
             return message
         }
     }
