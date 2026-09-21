@@ -52,7 +52,7 @@ virt-connector setup --device "LED Strip" --on TurnOnLED --off TurnOffLED
 
 以後、ディスプレイのスリープ/復帰に応じて`TurnOffLED`/`TurnOnLED`が実行されます。
 
-システム終了前にLEDの消灯動作を実行したい場合は、Appleメニューではなく、VirtConnectorのメニューバーアイコンから「システム終了...」を選びます。設定済みの`power_off`動作が成功した場合だけmacOSのシステム終了を要求します。Shortcutの成功とは別に、実際の機器状態を検証するものではありません。
+システム終了前にLEDの消灯動作を実行したい場合は、Appleメニューではなく、VirtConnectorのメニューバーアイコンから「システム終了…」を選びます。設定済みの`power_off`動作が成功した場合だけmacOSのシステム終了を要求します。Shortcutの成功とは別に、実際の機器状態を検証するものではありません。
 
 ## 構成
 
@@ -61,7 +61,7 @@ virt-connector setup --device "LED Strip" --on TurnOnLED --off TurnOffLED
 - `VirtConnectorAgent.app`
   - `virt-connectord`を含む常駐エージェントです。
   - ユーザーLaunchAgentとしてAquaセッションで起動します。
-  - メニューバーアイコンと「システム終了...」メニューを提供します。
+  - メニューバーアイコンと「システム終了…」メニューを提供します。
 - `virt-connectord`
   - `VirtConnectorAgent.app/Contents/MacOS/virt-connectord`に含まれる実行ファイルです。
   - `/usr/local/bin/virt-connectord`はこの実行ファイルへのsymlinkです。
@@ -75,8 +75,8 @@ virt-connector setup --device "LED Strip" --on TurnOnLED --off TurnOffLED
 - `display_off`
   - `NSWorkspace.screensDidSleepNotification`または`NSWorkspace.willSleepNotification`を受け取ったとき。
 - `power_off`
-  - VirtConnectorのメニューバー項目「システム終了...」または`virt-connector shutdown`で明示的にシステム終了を開始したとき。
-  - Appleメニューの「システム終了...」は`NSWorkspace.willPowerOffNotification`でbest-effortに扱える場合がありますが、Shortcutsがすでに終了処理に入っている場合は失敗することがあります。
+  - VirtConnectorのメニューバー項目「システム終了…」または`virt-connector shutdown`で明示的にシステム終了を開始したとき。
+  - Appleメニューの「システム終了…」は`NSWorkspace.willPowerOffNotification`でbest-effortに扱える場合がありますが、Shortcutsがすでに終了処理に入っている場合は失敗することがあります。
   - Homebrew upgrade、`launchctl bootout`、`SIGTERM`などのLaunchAgent停止イベントは`power_off`として扱いません。
 
 各デバイスはイベントごとに`on`、`off`、`none`を設定できます。
@@ -255,7 +255,7 @@ virt-connector status
 
 macOSへの終了要求より前に`power_off`動作を完了させたい場合は、以下のどちらかを使います。
 
-- メニューバーのVirtConnectorアイコンから「システム終了...」を選ぶ
+- メニューバーのVirtConnectorアイコンから「システム終了…」を選ぶ
 - CLIで`virt-connector shutdown`を実行する
 
 CLIの場合:
@@ -268,7 +268,7 @@ virt-connector shutdown
 
 Appleメニューからの終了は引き続きbest-effortです。Shortcutsがすでに使えない場合があり、機器操作に失敗してもVirtConnectorから外部の終了要求を取り消すことはできません。
 
-VirtConnectorの操作完了後、別のアプリケーションによってmacOSの終了がキャンセルされた場合は、メニューの「終了キャンセル後に監視を再開...」または以下を使います。
+VirtConnectorの操作完了後、別のアプリケーションによってmacOSの終了がキャンセルされた場合は、メニューの「監視を再開…」または以下を使います。
 
 ```sh
 virt-connector resume
@@ -277,6 +277,8 @@ virt-connector resume
 必ずmacOSの終了をキャンセル済みの場合だけ実行してください。イベント受付を再開する操作であり、OSの終了要求を取り消したり、無効な設定を有効化したりするものではありません。VirtConnector自体の終了要求に失敗した場合は、自動的に通常のイベント受付へ戻ります。
 
 Shortcutの実行期限は1プロセス30秒、イベント全体の動作は120秒です。タイムアウトは成功ではなく失敗として扱います。
+
+メニューの上部に監視状態と有効なデバイス数を表示します。自動連動オフ、設定読み込み失敗、終了準備中、終了要求済みも区別します。「監視を再開…」は終了要求の完了後に有効になります。終了と再開の確認画面には既定ボタンを設けず、Escでキャンセルできます。
 
 メニューバーの表示言語は、macOSの`AppleLanguages`、つまり`Locale.preferredLanguages`に従って日本語/英語を切り替えます。
 
@@ -364,7 +366,7 @@ scripts/build-pkg.sh --notarize
 最終pkgのSHA256をCaskに反映:
 
 ```sh
-scripts/update-cask.sh dist/VirtConnector-0.1.6-signed.pkg
+scripts/update-cask.sh dist/VirtConnector-0.1.7-signed.pkg
 ```
 
 ビルドとCask更新はリポジトリの`VERSION`ファイルを共有します。Cask更新前にpkgの識別子・バージョンを確認し、不一致の場合は変更を拒否します。必ずnotarize・staple後の最終成果物から更新してください。

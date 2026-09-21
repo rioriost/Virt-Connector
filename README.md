@@ -52,7 +52,7 @@ This creates or updates:
 
 After setup, display sleep/wake runs `TurnOffLED`/`TurnOnLED`.
 
-To run LED-off actions before shutdown, use the VirtConnector menu bar item `Shut Down...` instead of the Apple menu shutdown item. VirtConnector asks macOS to shut down only after the configured `power_off` actions succeed. A successful Shortcut does not independently verify the physical device state.
+To run LED-off actions before shutdown, use the VirtConnector menu bar item `Shut Down…` instead of the Apple menu shutdown item. VirtConnector asks macOS to shut down only after the configured `power_off` actions succeed. A successful Shortcut does not independently verify the physical device state.
 
 Japanese documentation is available in [README-ja.md](README-ja.md).
 
@@ -63,7 +63,7 @@ Japanese documentation is available in [README-ja.md](README-ja.md).
 - `VirtConnectorAgent.app`
   - Resident agent that contains `virt-connectord`.
   - Runs in the user's Aqua session as a LaunchAgent.
-  - Provides the menu bar icon and `Shut Down...` menu item.
+  - Provides the menu bar icon and `Shut Down…` menu item.
 - `virt-connectord`
   - Executable inside `VirtConnectorAgent.app/Contents/MacOS/virt-connectord`.
   - `/usr/local/bin/virt-connectord` is a symlink to this executable.
@@ -257,7 +257,7 @@ virt-connector status
 
 To complete `power_off` actions before requesting shutdown, use either:
 
-- the VirtConnector menu bar item `Shut Down...`
+- the VirtConnector menu bar item `Shut Down…`
 - `virt-connector shutdown`
 
 CLI:
@@ -270,7 +270,7 @@ This runs configured `power_off` actions, then asks macOS to shut down through S
 
 Apple menu shutdown remains best-effort: Shortcuts may already be unavailable and VirtConnector cannot cancel that external shutdown on a device-action failure.
 
-If another application cancels macOS shutdown after VirtConnector has finished its actions, use the agent menu `Resume After Canceled Shutdown...` or:
+If another application cancels macOS shutdown after VirtConnector has finished its actions, use the agent menu `Resume Monitoring…` or:
 
 ```sh
 virt-connector resume
@@ -279,6 +279,8 @@ virt-connector resume
 Only resume after canceling the OS shutdown. This command re-enables event handling; it does **not** cancel a pending macOS shutdown request or change a disabled configuration. Failed VirtConnector shutdown requests automatically return to normal event handling.
 
 Shortcuts have a 30-second per-process deadline and a 120-second total action budget per event. A timeout is a failure, not a successful device action.
+
+The menu shows monitoring status and the number of enabled devices. It distinguishes disabled automation, unavailable configuration, shutdown preparation, and a completed shutdown request. `Resume Monitoring…` becomes available after the shutdown request completes. Shutdown and resume confirmations have no default button and support Escape to cancel.
 
 The menu bar UI switches between English and Japanese using `AppleLanguages`, via `Locale.preferredLanguages`.
 
@@ -366,7 +368,7 @@ scripts/build-pkg.sh --notarize
 Update the Cask SHA256:
 
 ```sh
-scripts/update-cask.sh dist/VirtConnector-0.1.6-signed.pkg
+scripts/update-cask.sh dist/VirtConnector-0.1.7-signed.pkg
 ```
 
 The repository's `VERSION` file is shared by the build and Cask updater. The updater checks the package's identifier and version before changing the Cask; a mismatched package is rejected. Always update the Cask from the final notarized and stapled artifact.

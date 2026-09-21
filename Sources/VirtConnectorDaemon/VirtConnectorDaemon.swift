@@ -3,7 +3,7 @@ import Foundation
 import VirtConnectorCore
 
 @main
-final class VirtConnectorDaemon: NSObject, NSApplicationDelegate {
+final class VirtConnectorDaemon: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let configStore = ConfigStore()
     private let log = FileLog.daemonLog()
     private let cancellation = ProcessCancellation()
@@ -28,8 +28,7 @@ final class VirtConnectorDaemon: NSObject, NSApplicationDelegate {
         stateChanged: { [weak self] in
             DispatchQueue.main.async {
                 guard let self else { return }
-                self.shutdownMenuItem?.isEnabled = !self.coordinator.isShutdownPending
-                self.resumeMenuItem?.isEnabled = self.coordinator.canResume
+                self.refreshStatusMenu()
             }
         }
     )
@@ -37,9 +36,9 @@ final class VirtConnectorDaemon: NSObject, NSApplicationDelegate {
     private var ipcServer: AgentIPCServer?
     private var signalSources: [DispatchSourceSignal] = []
     private var statusItem: NSStatusItem?
-    private var shutdownMenuItem: NSMenuItem?
-    private var resumeMenuItem: NSMenuItem?
     private let localizer = AgentLocalizer()
+    private lazy var interface = AgentInterface(localizer: localizer, target: self,
+        shutdownAction: #selector(confirmAndShutdown), resumeAction: #selector(resumeMonitoring))
 
     static func main() {
         let daemon = VirtConnectorDaemon()
@@ -145,54 +144,55 @@ final class VirtConnectorDaemon: NSObject, NSApplicationDelegate {
     }
 
     private func installStatusMenu() {
-        let statusItem = NSStatusBar.system.statusItem(withLength: 32)
+        let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         self.statusItem = statusItem
 
         if let button = statusItem.button {
-            button.image = makeStatusImage()
+            button.image = AgentInterface.statusImage()
             button.imagePosition = .imageOnly
             button.toolTip = "VirtConnector"
         }
 
-        let menu = NSMenu()
-        menu.autoenablesItems = false
-        let shutdownItem = NSMenuItem(
-            title: localizer.shutdownMenuTitle,
-            action: #selector(confirmAndShutdown),
-            keyEquivalent: ""
-        )
-        shutdownItem.target = self
-        menu.addItem(shutdownItem)
-        self.shutdownMenuItem = shutdownItem
-        let resumeItem = NSMenuItem(
-            title: localizer.resumeMenuTitle, action: #selector(resumeMonitoring), keyEquivalent: ""
-        )
-        resumeItem.target = self
-        resumeItem.isEnabled = false
-        menu.addItem(resumeItem)
-        resumeMenuItem = resumeItem
-
-        statusItem.menu = menu
+        interface.menu.delegate = self
+        statusItem.menu = interface.menu
+        refreshStatusMenu()
         log.write("Installed status menu")
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        refreshStatusMenu()
+    }
+
+    private func refreshStatusMenu() {
+        let state: AgentMenuState
+        if coordinator.canResume {
+            state = .shutdownRequested
+        } else if coordinator.isShutdownPending {
+            state = .preparingShutdown
+        } else {
+            do {
+                let config = try configStore.load()
+                let count = config.devices.filter(\.enabled).count
+                state = config.enabled ? .monitoring(deviceCount: count) : .disabled
+            } catch {
+                state = .configurationUnavailable
+            }
+        }
+        interface.update(state)
+        statusItem?.button?.toolTip = interface.accessibilitySummary
+        statusItem?.button?.setAccessibilityLabel(interface.accessibilitySummary)
     }
 
     @objc private func confirmAndShutdown() {
         NSApp.activate(ignoringOtherApps: true)
 
-        let alert = NSAlert()
-        alert.messageText = localizer.shutdownDialogTitle
-        alert.informativeText = localizer.shutdownDialogMessage
-        alert.alertStyle = .warning
-        alert.icon = makeShutdownAlertIcon()
-        alert.addButton(withTitle: localizer.shutdownButtonTitle)
-        alert.addButton(withTitle: localizer.cancelButtonTitle)
+        let alert = interface.shutdownAlert()
 
         guard alert.runModal() == .alertFirstButtonReturn else {
             log.write("Menu shutdown canceled")
             return
         }
 
-        shutdownMenuItem?.isEnabled = false
         log.write("Menu shutdown requested")
 
         coordinator.shutdown { [weak self] result in
@@ -209,58 +209,24 @@ final class VirtConnectorDaemon: NSObject, NSApplicationDelegate {
     }
 
     @objc private func resumeMonitoring() {
-        let alert = NSAlert()
-        alert.messageText = localizer.resumeMenuTitle
-        alert.informativeText = localizer.resumeMessage
-        alert.addButton(withTitle: localizer.resumeButtonTitle)
-        alert.addButton(withTitle: localizer.cancelButtonTitle)
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = interface.resumeAlert()
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         do {
             try coordinator.resumeAfterCancelledShutdown()
         } catch {
-            showShutdownError(error)
+            showError(error, title: localizer.resumeFailedTitle)
         }
     }
 
     private func showShutdownError(_ error: Error) {
+        showError(error, title: localizer.shutdownFailedTitle)
+    }
+
+    private func showError(_ error: Error, title: String) {
         NSApp.activate(ignoringOtherApps: true)
-
-        let alert = NSAlert()
-        alert.messageText = localizer.shutdownFailedTitle
-        alert.informativeText = error.localizedDescription
-        alert.alertStyle = .critical
-        alert.addButton(withTitle: "OK")
+        let alert = interface.errorAlert(title: title, message: error.localizedDescription)
         alert.runModal()
-    }
-
-    private func makeStatusImage() -> NSImage? {
-        guard let symbol = NSImage(
-            systemSymbolName: "power.circle",
-            accessibilityDescription: "VirtConnector"
-        ) else {
-            return nil
-        }
-
-        let image = NSImage(size: NSSize(width: 28, height: 22))
-        image.lockFocus()
-
-        let symbolSize = NSSize(width: 17, height: 17)
-        let rect = NSRect(
-            x: (image.size.width - symbolSize.width) / 2,
-            y: (image.size.height - symbolSize.height) / 2,
-            width: symbolSize.width,
-            height: symbolSize.height
-        )
-        symbol.draw(in: rect)
-
-        image.unlockFocus()
-        image.isTemplate = true
-        return image
-    }
-
-    private func makeShutdownAlertIcon() -> NSImage? {
-        NSImage(systemSymbolName: "power.circle.fill", accessibilityDescription: localizer.shutdownDialogTitle)
-            ?? NSImage(named: NSImage.cautionName)
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -279,59 +245,5 @@ final class VirtConnectorDaemon: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         ipcServer?.stop()
         log.write("Application terminating without additional power_off actions")
-    }
-}
-
-private struct AgentLocalizer {
-    private let languageCode: String
-
-    init(preferredLanguages: [String] = Locale.preferredLanguages) {
-        languageCode = preferredLanguages.first?.lowercased() ?? "en"
-    }
-
-    var shutdownMenuTitle: String {
-        isJapanese ? "システム終了..." : "Shut Down..."
-    }
-
-    var shutdownDialogTitle: String {
-        isJapanese ? "このMacをシステム終了しますか？" : "Shut Down This Mac?"
-    }
-
-    var shutdownDialogMessage: String {
-        if isJapanese {
-            return "設定済みの電源オフ動作に成功した後、macOSのシステム終了を要求します。動作に失敗した場合は終了を中止します。"
-        }
-        return "VirtConnector requests macOS shutdown only after configured power-off actions succeed. Failed actions cancel this request."
-    }
-
-    var shutdownButtonTitle: String {
-        isJapanese ? "システム終了" : "Shut Down"
-    }
-
-    var cancelButtonTitle: String {
-        isJapanese ? "キャンセル" : "Cancel"
-    }
-
-    var shutdownFailedTitle: String {
-        isJapanese ? "システム終了に失敗しました" : "Shutdown Failed"
-    }
-
-    var resumeMenuTitle: String {
-        isJapanese ? "終了キャンセル後に監視を再開..." : "Resume After Canceled Shutdown..."
-    }
-
-    var resumeButtonTitle: String {
-        isJapanese ? "監視を再開" : "Resume Monitoring"
-    }
-
-    var resumeMessage: String {
-        if isJapanese {
-            return "macOSの終了をキャンセル済みの場合だけ再開してください。この操作自体はmacOSの終了要求を取り消しません。"
-        }
-        return "Resume only after canceling macOS shutdown. This action does not cancel the operating system's shutdown request."
-    }
-
-    private var isJapanese: Bool {
-        languageCode == "ja" || languageCode.hasPrefix("ja-") || languageCode.hasPrefix("ja_")
     }
 }
