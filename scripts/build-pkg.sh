@@ -27,6 +27,7 @@ Environment:
   DEVELOPER_ID_APPLICATION         Developer ID Application certificate name
   DEVELOPER_ID_INSTALLER           Developer ID Installer certificate name
   NOTARYTOOL_PROFILE               xcrun notarytool keychain profile
+  NOTARYTOOL_KEYCHAIN              Optional explicit Keychain file
   SWIFT_BUILD_SYSTEM               SwiftPM backend. Default: native
 
 Artifacts target arm64 and macOS 13.0. Both binaries must report the selected
@@ -222,9 +223,22 @@ fi
 pkgbuild "${pkgbuild_args[@]}" "$FINAL_PKG_PATH"
 
 if [[ "$notarize" == true ]]; then
+  notary_args=(--keychain-profile "$NOTARYTOOL_PROFILE")
+  if [[ -n "${NOTARYTOOL_KEYCHAIN:-}" ]]; then
+    notary_args+=(--keychain "$NOTARYTOOL_KEYCHAIN")
+  fi
   xcrun notarytool submit "$FINAL_PKG_PATH" \
-    --keychain-profile "$NOTARYTOOL_PROFILE" \
-    --wait
+    "${notary_args[@]}" \
+    --wait --output-format json > "$FINAL_PKG_PATH.notary.json"
+  cat "$FINAL_PKG_PATH.notary.json"
+  python3 - "$FINAL_PKG_PATH.notary.json" <<'PY'
+import json
+import sys
+with open(sys.argv[1]) as stream:
+    result = json.load(stream)
+if result.get("status") != "Accepted":
+    sys.exit("Apple notarization was not accepted; package is not ready for release")
+PY
   xcrun stapler staple "$FINAL_PKG_PATH"
   xcrun stapler validate "$FINAL_PKG_PATH"
 fi

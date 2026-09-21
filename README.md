@@ -347,22 +347,19 @@ DEVELOPER_ID_INSTALLER="Developer ID Installer: Your Name (TEAMID)" \
 scripts/build-pkg.sh
 ```
 
-Store notarytool credentials:
+Follow the [canonical release procedure](docs/releases/RELEASING.md) for public releases. The dedicated notary profile and signing identities are defined in `scripts/release-config.sh`.
+
+Register credentials once in an interactive Terminal. Enter your Apple ID, then enter the app-specific password only at notarytool's hidden prompt:
 
 ```sh
-APPLE_ID=you@example.com \
-APPLE_TEAM_ID=TEAMID \
-APPLE_APP_SPECIFIC_PASSWORD=xxxx-xxxx-xxxx-xxxx \
-scripts/notarytool-store-credentials.sh virt-connector-notary
+scripts/notarytool-store-credentials.sh
 ```
 
-Notarize and staple:
+Run preflight, then sign, notarize, staple, verify and update the Cask:
 
 ```sh
-DEVELOPER_ID_APPLICATION="Developer ID Application: Your Name (TEAMID)" \
-DEVELOPER_ID_INSTALLER="Developer ID Installer: Your Name (TEAMID)" \
-NOTARYTOOL_PROFILE=virt-connector-notary \
-scripts/build-pkg.sh --notarize
+scripts/release.sh check
+scripts/release.sh prepare
 ```
 
 Update the Cask SHA256:

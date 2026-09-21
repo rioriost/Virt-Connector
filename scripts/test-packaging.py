@@ -81,10 +81,20 @@ elif name == "xcrun":
         print(" platform " + os.environ.get("TEST_PLATFORM", "MACOS"))
         print("    minos " + os.environ.get("TEST_MIN_OS", "13.0"))
         print("      sdk " + os.environ.get("TEST_SDK_VERSION", "27.0"))
+    elif args[:2] == ["notarytool", "submit"] and os.environ.get("TEST_SIGNED"):
+        assert option("--keychain-profile") == "fixture-notary"
+        assert option("--keychain") == "/fixture/login.keychain-db"
+        assert option("--output-format") == "json"
+        print(json.dumps({"id": "fixture-submission", "status": os.environ.get("TEST_NOTARY_STATUS", "Accepted")}))
+    elif args[:2] == ["stapler", "staple"] and os.environ.get("TEST_SIGNED"):
+        package = Path(args[2])
+        package.write_bytes(package.read_bytes() + b"\n")
+    elif args[:2] == ["stapler", "validate"] and os.environ.get("TEST_SIGNED"):
+        assert Path(args[2]).read_bytes().endswith(b"\n")
     else:
         sys.exit("unexpected xcrun operation")
 elif name == "pkgbuild":
-    assert "--sign" not in args
+    assert ("--sign" in args) == bool(os.environ.get("TEST_SIGNED"))
     root = Path(option("--root"))
     scripts = Path(option("--scripts"))
     assert (root / "Library/VirtConnector/bin/virt-connector").read_text() == "fixture-virt-connector"
@@ -103,6 +113,9 @@ elif name == "pkgbuild":
 elif name == "xattr":
     assert args[0] == "-cr"
 elif name in ("codesign", "productsign", "installer", "launchctl"):
+    if name == "codesign" and os.environ.get("TEST_SIGNED"):
+        assert "--sign" in args and "--timestamp" in args
+        sys.exit(0)
     sys.exit("forbidden live operation: " + name)
 else:
     sys.exit("unexpected mock tool: " + name)
@@ -133,7 +146,7 @@ class PackagingTests(unittest.TestCase):
         self.env = {key: value for key, value in os.environ.items()
                     if key not in ("VERSION", "CONFIGURATION", "DIST_DIR", "PKG_IDENTIFIER",
                                    "SWIFT_BUILD_SYSTEM", "DEVELOPER_ID_APPLICATION",
-                                   "DEVELOPER_ID_INSTALLER", "NOTARYTOOL_PROFILE")
+                                   "DEVELOPER_ID_INSTALLER", "NOTARYTOOL_PROFILE", "NOTARYTOOL_KEYCHAIN")
                     and not key.startswith("TEST_")}
         self.env.update(PATH=f"{tools}:{os.environ['PATH']}",
                         TEST_CALLS=str(self.calls_path), TEST_PROJECT=str(self.root))
@@ -265,6 +278,27 @@ class PackagingTests(unittest.TestCase):
         swift = [call for call in self.calls() if call[0] == "swift"]
         self.assertEqual(swift[1], [*swift[0], "--show-bin-path"])
         self.assertEqual(swift[0][swift[0].index("--build-system") + 1], "swiftbuild")
+        self.assert_work_cleaned()
+
+    def test_notarized_build_records_acceptance_and_hashes_stapled_artifact(self):
+        result = self.run_script("build-pkg.sh", "--notarize", TEST_SIGNED="1",
+            DEVELOPER_ID_APPLICATION="fixture-application", DEVELOPER_ID_INSTALLER="fixture-installer",
+            NOTARYTOOL_PROFILE="fixture-notary", NOTARYTOOL_KEYCHAIN="/fixture/login.keychain-db")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        package = self.root / f"dist/VirtConnector-{VERSION}-signed.pkg"
+        self.assertEqual(json.loads(Path(str(package) + ".notary.json").read_text())["status"], "Accepted")
+        self.assertTrue(package.read_bytes().endswith(b"\n"))
+        self.assertIn(hashlib.sha256(package.read_bytes()).hexdigest(), Path(str(package) + ".sha256").read_text())
+        self.assert_work_cleaned()
+
+    def test_rejected_notarization_never_staples_or_produces_final_checksum(self):
+        result = self.run_script("build-pkg.sh", "--notarize", TEST_SIGNED="1", TEST_NOTARY_STATUS="Invalid",
+            DEVELOPER_ID_APPLICATION="fixture-application", DEVELOPER_ID_INSTALLER="fixture-installer",
+            NOTARYTOOL_PROFILE="fixture-notary", NOTARYTOOL_KEYCHAIN="/fixture/login.keychain-db")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not accepted", result.stderr)
+        self.assertFalse(any(call[:2] == ["xcrun", "stapler"] for call in self.calls()))
+        self.assertFalse((self.root / f"dist/VirtConnector-{VERSION}-signed.pkg.sha256").exists())
         self.assert_work_cleaned()
 
     def test_invalid_binary_metadata_prevents_packaging(self):

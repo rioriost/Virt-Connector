@@ -345,22 +345,19 @@ DEVELOPER_ID_INSTALLER="Developer ID Installer: Your Name (TEAMID)" \
 scripts/build-pkg.sh
 ```
 
-notarytoolの認証情報を保存:
+公開リリースは[固定リリース手順](docs/releases/RELEASING.md)に従います。専用プロファイルと署名設定は `scripts/release-config.sh` を唯一の参照先とします。
+
+初回のみ、Terminalから認証情報を登録します。Apple IDを入力した後、notarytoolの非表示プロンプトでアプリ用パスワードを入力してください。
 
 ```sh
-APPLE_ID=you@example.com \
-APPLE_TEAM_ID=TEAMID \
-APPLE_APP_SPECIFIC_PASSWORD=xxxx-xxxx-xxxx-xxxx \
-scripts/notarytool-store-credentials.sh virt-connector-notary
+scripts/notarytool-store-credentials.sh
 ```
 
-notarizeしてstaple:
+事前確認と、署名・公証・Staple・検証・Cask更新:
 
 ```sh
-DEVELOPER_ID_APPLICATION="Developer ID Application: Your Name (TEAMID)" \
-DEVELOPER_ID_INSTALLER="Developer ID Installer: Your Name (TEAMID)" \
-NOTARYTOOL_PROFILE=virt-connector-notary \
-scripts/build-pkg.sh --notarize
+scripts/release.sh check
+scripts/release.sh prepare
 ```
 
 最終pkgのSHA256をCaskに反映:
