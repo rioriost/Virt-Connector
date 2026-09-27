@@ -376,15 +376,17 @@ scripts/update-cask.sh dist/VirtConnector-0.1.7-signed.pkg
 
 ## ビルド
 
+開発用Formulaを含むすべてのビルドは、Apple Silicon（arm64、別名aarch64）のみを対象とし、macOS 13以降を必要とします。Swiftでのアーキテクチャ名は`arm64`です。Intel（`x86_64`）およびUniversalビルドはサポートせず、共有Coreのコンパイル時にarm64以外のターゲットを拒否します。
+
 ```sh
-swift build
-swift build -c release
+swift build --triple arm64-apple-macosx13.0
+swift build -c release --triple arm64-apple-macosx13.0
 ```
 
 回帰テストは一時設定とOS操作の代替実装を使い、Macのシステム終了や実機の操作を行いません。
 
 ```sh
-swift test
+swift test --triple arm64-apple-macosx13.0
 python3 -B -m unittest scripts/test-postinstall.py scripts/test-packaging.py
 ```
 

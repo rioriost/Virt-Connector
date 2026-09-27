@@ -2,6 +2,11 @@
 
 This is the canonical procedure for Developer ID package releases through GitHub and `rioriost/homebrew-cask`. Do not borrow another app's notary profile or publish an unstapled package. App Store Connect submission is not part of this distribution route.
 
+Builds target Apple Silicon only (`arm64`, also known as aarch64), with a minimum
+OS of macOS 13.0. Release tests, the UI preview and package builds explicitly
+target `arm64-apple-macosx13.0`. The shared core rejects non-arm64 targets;
+Intel and Universal binaries are not supported.
+
 ## One-time setup or credential replacement
 
 Non-secret release settings live only in `scripts/release-config.sh`:

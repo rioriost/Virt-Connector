@@ -354,6 +354,10 @@ class PackagingTests(unittest.TestCase):
         self.assertIn("depends_on macos: :ventura", cask)
         self.assertRegex(cask, r'(?m)^  sha256 "[a-f0-9]{64}"$')
         formula = (ROOT / "Formula/virt-connector.rb").read_text()
+        self.assertIn("depends_on arch: :arm64", formula)
+        self.assertIn('"--triple", "arm64-apple-macosx13.0"', formula)
+        for binary in ("virt-connector", "virt-connectord"):
+            self.assertIn(f'bin.install ".build/arm64-apple-macosx/release/{binary}"', formula)
         self.assertRegex(formula, r'(?m)^  head "https://[^"]+\.git", branch: "main"$')
         self.assertNotRegex(formula, r"(?m)^  (url|sha256|version) ")
         self.assertNotIn("PUT_SHA256_HERE", formula)

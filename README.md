@@ -378,15 +378,20 @@ The intended distribution path for users is the Cask. The Cask can install `Virt
 
 ## Build
 
+All builds, including the development Formula, target Apple Silicon only
+(arm64, also called aarch64), with macOS 13 or later. Swift calls this
+architecture `arm64`. Intel (`x86_64`) and Universal builds are not supported;
+the shared core rejects non-arm64 compilation targets.
+
 ```sh
-swift build
-swift build -c release
+swift build --triple arm64-apple-macosx13.0
+swift build -c release --triple arm64-apple-macosx13.0
 ```
 
 Regression tests use temporary configurations and substitute OS operations; they do not shut down the Mac or control real devices:
 
 ```sh
-swift test
+swift test --triple arm64-apple-macosx13.0
 python3 -B -m unittest scripts/test-postinstall.py scripts/test-packaging.py
 ```
 

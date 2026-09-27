@@ -64,10 +64,10 @@ case "$1" in
       echo "Version ${release_version} is already published; increment VERSION instead of rebuilding its assets." >&2
       exit 1
     fi
-    swift test --build-system native --quiet
+    swift test --build-system native --triple arm64-apple-macosx13.0 --quiet
     python3 -B -m unittest scripts/test-postinstall.py scripts/test-packaging.py scripts/test-release.py
     mkdir -p .build/release-ui
-    swiftc -parse-as-library Sources/VirtConnectorDaemon/AgentInterface.swift \
+    swiftc -target arm64-apple-macosx13.0 -parse-as-library Sources/VirtConnectorDaemon/AgentInterface.swift \
       Sources/VirtConnectorDaemon/AgentLocalizer.swift scripts/preview-ui.swift \
       -o .build/release-ui/preview
     .build/release-ui/preview --check

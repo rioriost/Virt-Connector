@@ -5,12 +5,13 @@ class VirtConnector < Formula
   head "https://github.com/rioriost/Virt-Connector.git", branch: "main"
 
   depends_on xcode: ["15.0", :build]
+  depends_on arch: :arm64
   depends_on macos: :ventura
 
   def install
-    system "swift", "build", "-c", "release", "--disable-sandbox"
-    bin.install ".build/release/virt-connector"
-    bin.install ".build/release/virt-connectord"
+    system "swift", "build", "-c", "release", "--triple", "arm64-apple-macosx13.0", "--disable-sandbox"
+    bin.install ".build/arm64-apple-macosx/release/virt-connector"
+    bin.install ".build/arm64-apple-macosx/release/virt-connectord"
   end
 
   test do
