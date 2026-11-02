@@ -81,6 +81,10 @@ Japanese documentation is available in [README-ja.md](README-ja.md).
   - Apple menu shutdown may be handled best-effort through `NSWorkspace.willPowerOffNotification`, but Shortcuts may already be unavailable by that phase.
   - LaunchAgent stop events such as Homebrew upgrades, `launchctl bootout`, or `SIGTERM` are not treated as `power_off`.
 
+At agent startup, an awake display also triggers `display_on`, covering logins where the wake notification has already passed. Before automatic `display_on` actions, the agent starts Shortcuts hidden without activating it so its app session can initialize.
+
+If an automatic `display_on` action fails, the agent retries up to three times, waiting 2, 5, and 10 seconds after each failed attempt. A newer display event, manual action, shutdown, or agent stop cancels pending retries. Manual CLI actions, `display_off`, and `power_off` are not automatically retried. Each retry uses the normal action deadlines.
+
 Each device can choose `on`, `off`, or `none` for each event.
 
 Display events, manual CLI actions, and shutdown requests share one execution coordinator while the agent is running. Once shutdown preparation starts, queued display actions are skipped and new manual actions are rejected. Repeated shutdown notifications do not rerun the same power-off actions. An unloaded agent permits standalone CLI execution, protected against concurrent agent/CLI execution by a per-user ownership lock.

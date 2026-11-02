@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import Foundation
 import VirtConnectorCore
 
@@ -35,6 +36,7 @@ final class VirtConnectorDaemon: NSObject, NSApplicationDelegate, NSMenuDelegate
     private let ownership = AgentOwnershipLock()
     private var ipcServer: AgentIPCServer?
     private var signalSources: [DispatchSourceSignal] = []
+    private var displayPreparationGeneration: UInt64 = 0
     private var statusItem: NSStatusItem?
     private let localizer = AgentLocalizer()
     private lazy var interface = AgentInterface(localizer: localizer, target: self,
@@ -71,6 +73,37 @@ final class VirtConnectorDaemon: NSObject, NSApplicationDelegate, NSMenuDelegate
         observePowerOff()
         observeSignals()
         log.write("virt-connectord started")
+        // Login can start the agent after the display-wake notification has already passed.
+        // Run once through the same coordinator so subsequent sleep cancels pending retries.
+        if CGDisplayIsAsleep(CGMainDisplayID()) == 0 {
+            handleDisplayEvent(.displayOn, reason: "agent startup with awake display")
+        }
+    }
+
+    private func handleDisplayEvent(_ trigger: PowerTrigger, reason: String) {
+        displayPreparationGeneration &+= 1
+        let generation = displayPreparationGeneration
+        guard trigger == .displayOn else {
+            coordinator.handleDisplayEvent(trigger, reason: reason)
+            return
+        }
+        // On macOS 27.2 CLI Home actions can wait indefinitely until Shortcuts has
+        // initialized its app session. Launch it hidden without taking keyboard focus.
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = false
+        configuration.hides = true
+        NSWorkspace.shared.openApplication(
+            at: URL(fileURLWithPath: "/System/Applications/Shortcuts.app"),
+            configuration: configuration
+        ) { [weak self] _, error in
+            DispatchQueue.main.async {
+                guard let self, self.displayPreparationGeneration == generation else { return }
+                if let error {
+                    self.log.write("Unable to initialize Shortcuts: \(error.localizedDescription)")
+                }
+                self.coordinator.handleDisplayEvent(trigger, reason: reason)
+            }
+        }
     }
 
     private func observeDisplayPowerEvents() {
@@ -81,7 +114,7 @@ final class VirtConnectorDaemon: NSObject, NSApplicationDelegate, NSMenuDelegate
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.coordinator.handleDisplayEvent(.displayOff, reason: "NSWorkspace.screensDidSleepNotification")
+            self?.handleDisplayEvent(.displayOff, reason: "NSWorkspace.screensDidSleepNotification")
         }
 
         workspaceCenter.addObserver(
@@ -89,7 +122,7 @@ final class VirtConnectorDaemon: NSObject, NSApplicationDelegate, NSMenuDelegate
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.coordinator.handleDisplayEvent(.displayOn, reason: "NSWorkspace.screensDidWakeNotification")
+            self?.handleDisplayEvent(.displayOn, reason: "NSWorkspace.screensDidWakeNotification")
         }
 
         workspaceCenter.addObserver(
@@ -97,7 +130,7 @@ final class VirtConnectorDaemon: NSObject, NSApplicationDelegate, NSMenuDelegate
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.coordinator.handleDisplayEvent(.displayOff, reason: "NSWorkspace.willSleepNotification")
+            self?.handleDisplayEvent(.displayOff, reason: "NSWorkspace.willSleepNotification")
         }
 
         workspaceCenter.addObserver(
@@ -105,7 +138,7 @@ final class VirtConnectorDaemon: NSObject, NSApplicationDelegate, NSMenuDelegate
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.coordinator.handleDisplayEvent(.displayOn, reason: "NSWorkspace.didWakeNotification")
+            self?.handleDisplayEvent(.displayOn, reason: "NSWorkspace.didWakeNotification")
         }
 
         log.write("Installed NSWorkspace display sleep/wake observers")

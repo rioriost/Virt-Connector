@@ -34,14 +34,18 @@ public final class PowerEventCoordinator {
     private var shutdownResult: ActionExecutionResult?
     private var completions: [Completion] = []
     private var terminationWaiters: [() -> Void] = []
+    private let displayRetryDelays: [TimeInterval]
+    private var displayGeneration: UInt64 = 0
     private var lastDisplayEvent: (PowerTrigger, TimeInterval)?
 
     public init(
         execute: @escaping (PowerTrigger) throws -> ActionExecutionResult,
         requestShutdown: @escaping () throws -> Void,
         log: @escaping (String) -> Void = { _ in },
-        stateChanged: @escaping () -> Void = {}
+        stateChanged: @escaping () -> Void = {},
+        displayRetryDelays: [TimeInterval] = [2, 5, 10]
     ) {
+        self.displayRetryDelays = displayRetryDelays
         self.execute = execute
         self.requestOSShutdown = requestShutdown
         self.log = log
@@ -75,15 +79,41 @@ public final class PowerEventCoordinator {
             return
         }
         lastDisplayEvent = (trigger, now)
+        displayGeneration &+= 1
+        let generation = displayGeneration
         lock.unlock()
-        run(trigger) { [log] result in
-            if case .failure(let error) = result {
+        enqueueDisplayEvent(trigger, reason: reason, generation: generation, attempt: 0)
+    }
+
+    private func enqueueDisplayEvent(_ trigger: PowerTrigger, reason: String, generation: UInt64, attempt: Int) {
+        let action = { [self] in
+            lock.lock()
+            let permitted = state == .running && displayGeneration == generation
+            lock.unlock()
+            guard permitted else { return }
+            do {
+                let result = try execute(trigger)
+                try result.requireSuccess()
+            } catch {
                 log("Event \(trigger.rawValue) from \(reason) failed: \(error.localizedDescription)")
+                // Only retry automatic wake actions. A newer event, manual command, or shutdown
+                // invalidates this generation so a delayed retry cannot turn the light back on.
+                guard trigger == .displayOn, attempt < displayRetryDelays.count else { return }
+                log("Retrying display_on in \(displayRetryDelays[attempt]) seconds (retry \(attempt + 1))")
+                enqueueDisplayEvent(trigger, reason: reason, generation: generation, attempt: attempt + 1)
             }
+        }
+        if attempt == 0 {
+            queue.async(execute: action)
+        } else {
+            queue.asyncAfter(deadline: .now() + displayRetryDelays[attempt - 1], execute: action)
         }
     }
 
     public func run(_ trigger: PowerTrigger, completion: @escaping Completion) {
+        lock.lock()
+        displayGeneration &+= 1
+        lock.unlock()
         queue.async {
             self.lock.lock()
             let permitted = self.state == .running
@@ -109,6 +139,7 @@ public final class PowerEventCoordinator {
             return
         case .running:
             state = .preparing
+            displayGeneration &+= 1
             completions.append(completion)
             lock.unlock()
         case .preparing, .requestingShutdown:
@@ -171,6 +202,7 @@ public final class PowerEventCoordinator {
     public func stop(completion: @escaping () -> Void) {
         lock.lock()
         state = .stopping
+        displayGeneration &+= 1
         lock.unlock()
         stateChanged()
         queue.async { completion() }
